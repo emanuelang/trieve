@@ -1,0 +1,84 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.temp
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# CMake / Make build outputs
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+install_manifest.txt
+Makefile.user
+
+# Visual Studio / MSVC artifacts
+.vs/
+*.sln
+*.slnx
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.lastbuildstate
+*.recipe
+*.exe
+*.dll
+*.lib
+*.exp
+
+# vcpkg local installs and checkouts
+vcpkg_installed/
+external/vcpkg/
+
+# Frontend / Node artifacts
+node_modules/
+dist/
+coverage/
+.next/
+.vite/
+*.tsbuildinfo
+
+# Python helper artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local app data and generated model files
+data/
+models/
+*.db
+*.sqlite
+*.sqlite3
+*.onnx
+*.bin
+*.safetensors
+*.pt
+*.pth

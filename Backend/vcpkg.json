@@ -1,0 +1,9 @@
+{
+  "name": "semantic-fs-backend",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "fmt",
+    "spdlog",
+    "nlohmann-json"
+  ]
+}
