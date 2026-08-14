@@ -4,6 +4,7 @@
   "dependencies": [
     "fmt",
     "spdlog",
-    "nlohmann-json"
+    "nlohmann-json",
+    "tesseract"
   ]
 }

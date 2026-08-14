@@ -1,26 +1,28 @@
-VCPKG_DIR ?= C:/tools/vcpkg
-VCPKG_TOOLCHAIN := $(VCPKG_DIR)/scripts/buildsystems/vcpkg.cmake
-VCPKG_DIR_WIN := $(subst /,\,$(VCPKG_DIR))
-VCPKG_TOOLCHAIN_WIN := $(subst /,\,$(VCPKG_TOOLCHAIN))
-BUILD_DIR ?= build
-CONFIG ?= Debug
+VCPKG_DIR=external/vcpkg
+VCPKG_TOOLCHAIN=$(VCPKG_DIR)/scripts/buildsystems/vcpkg.cmake
+BUILD_DIR=build
+CONFIG=Debug
+TESSDATA_DIR=tessdata
+TESSDATA_LANG=eng
+TESSDATA_URL=https://github.com/tesseract-ocr/tessdata_fast/raw/main/$(TESSDATA_LANG).traineddata
 
-.PHONY: setup-vcpkg configure build run setup clean
+.PHONY: setup-vcpkg setup-tessdata configure build run setup clean
 
 setup-vcpkg:
-	@if not exist "$(VCPKG_TOOLCHAIN_WIN)" git submodule update --init --recursive
-	@if not exist "$(VCPKG_TOOLCHAIN_WIN)" if not exist "external" mkdir external
-	@if not exist "$(VCPKG_TOOLCHAIN_WIN)" git clone https://github.com/microsoft/vcpkg.git "$(VCPKG_DIR_WIN)"
-	@if not exist "$(VCPKG_DIR_WIN)\vcpkg.exe" if exist "$(VCPKG_DIR_WIN)\bootstrap-vcpkg.bat" call "$(VCPKG_DIR_WIN)\bootstrap-vcpkg.bat"
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '$(VCPKG_DIR)')) { git submodule update --init --recursive }; if (!(Test-Path '$(VCPKG_DIR)')) { New-Item -ItemType Directory -Force -Path 'external' | Out-Null; git clone https://github.com/microsoft/vcpkg.git '$(VCPKG_DIR)' }"
+	cd $(VCPKG_DIR) && bootstrap-vcpkg.bat
 
-configure: setup-vcpkg
+setup-tessdata:
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path '$(TESSDATA_DIR)' | Out-Null; if (!(Test-Path '$(TESSDATA_DIR)/$(TESSDATA_LANG).traineddata')) { Invoke-WebRequest -Uri '$(TESSDATA_URL)' -OutFile '$(TESSDATA_DIR)/$(TESSDATA_LANG).traineddata' }"
+
+configure: setup-vcpkg setup-tessdata
 	cmake -S . -B $(BUILD_DIR) -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_TOOLCHAIN)
 
 build: configure
 	cmake --build $(BUILD_DIR) --config $(CONFIG)
 
 run: build
-	./$(BUILD_DIR)/$(CONFIG)/semantic_fs_backend.exe
+	.\$(BUILD_DIR)\$(CONFIG)\semantic_fs_backend.exe
 
 setup: build
 

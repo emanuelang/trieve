@@ -8,6 +8,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(Tesseract CONFIG REQUIRED)
+
+if(TARGET libtesseract)
+    set(TESSERACT_TARGET libtesseract)
+elseif(TARGET Tesseract::libtesseract)
+    set(TESSERACT_TARGET Tesseract::libtesseract)
+elseif(TARGET tesseract::libtesseract)
+    set(TESSERACT_TARGET tesseract::libtesseract)
+else()
+    message(FATAL_ERROR "Tesseract target not found")
+endif()
 
 file(GLOB_RECURSE SOURCES
     src/*.cpp
@@ -27,4 +38,5 @@ target_link_libraries(semantic_fs_backend
     fmt::fmt
     spdlog::spdlog
     nlohmann_json::nlohmann_json
+    ${TESSERACT_TARGET}
 )
