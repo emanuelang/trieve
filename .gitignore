@@ -53,6 +53,7 @@ Makefile.user
 # vcpkg local installs and checkouts
 vcpkg_installed/
 external/vcpkg/
+Backend/external/vcpkg/
 
 # Frontend / Node artifacts
 node_modules/
