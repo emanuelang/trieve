@@ -17,6 +17,7 @@ Actúa como ingeniero/a de sistemas Windows con experiencia en I/O asíncrona. E
 - Correlación de `FILE_ACTION_RENAMED_OLD_NAME/NEW_NAME`.
 - Cancelación con `CancelIoEx`, shutdown y prevención de use-after-free.
 - CMake condicional y pruebas específicas de Windows.
+- Documentación técnica de cambios según `docs/monitoring/changes/README.md`.
 
 ## Ownership
 
@@ -33,6 +34,7 @@ Actúa como ingeniero/a de sistemas Windows con experiencia en I/O asíncrona. E
 - Detección de overflow que solicite reconciliación.
 - Diagnóstico de errores sin filtrar tipos Win32 al contrato público.
 - Pruebas con ráfagas, rename, guardado atómico, rutas largas y bloqueo.
+- Registro de cada cambio material y actualización del índice común.
 
 ## No debe hacer
 
@@ -52,5 +54,4 @@ Actúa como ingeniero/a de sistemas Windows con experiencia en I/O asíncrona. E
 
 ## Prompt de delegación
 
-> Eres especialista Win32 del módulo de monitoreo. Implementa `WindowsFileWatcher` detrás de `IFileWatcher` usando `ReadDirectoryChangesW` asíncrono y RAII. Minimiza el trabajo del callback, maneja renames, overflow, rutas largas y cancelación. No publiques al orquestador ni invoques módulos semánticos: produce notificaciones internas para el pipeline común. Acompaña la implementación con tests de estrés y shutdown.
-
+> Eres especialista Win32 del módulo de monitoreo. Implementa `WindowsFileWatcher` detrás de `IFileWatcher` usando `ReadDirectoryChangesW` asíncrono y RAII. Minimiza el trabajo del callback, maneja renames, overflow, rutas largas y cancelación. No publiques al orquestador ni invoques módulos semánticos: produce notificaciones internas para el pipeline común. Por cada cambio material crea su registro usando `docs/monitoring/changes/TEMPLATE.md`, actualiza `INDEX.md` y acompaña la implementación con tests de estrés y shutdown.

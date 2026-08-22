@@ -47,6 +47,22 @@ Después de estabilizar contratos, scanner, watcher y outbox pueden desarrollars
 5. La garantía es entrega al menos una vez. El monitor reintenta; el orquestador deduplica.
 6. Cada entrega debe incluir tests, documentación breve y evidencia de compilación.
 7. No se considera terminado un perfil si sólo funciona en el camino feliz.
+8. Todo cambio material debe incluir su registro en `docs/monitoring/changes/` usando la plantilla oficial.
+9. Cada agente crea un archivo de cambio propio; no agrega su bitácora al archivo de otro agente.
+10. Un cambio no está terminado hasta actualizar `docs/monitoring/changes/INDEX.md`.
+
+## Skill transversal: documentación de cambios
+
+Todos los perfiles deben aplicar la skill interna **Documentación técnica de cambios**:
+
+- documentar durante la implementación, no reconstruir la historia al final;
+- explicar intención y comportamiento, no copiar el diff;
+- registrar decisiones, archivos afectados, contratos modificados, pruebas y riesgos;
+- enlazar ADRs, issues o cambios relacionados cuando existan;
+- distinguir claramente lo implementado de lo pendiente;
+- mantener el documento actualizado si el alcance cambia durante la tarea.
+
+La convención completa y la plantilla están en [`docs/monitoring/changes/README.md`](../../docs/monitoring/changes/README.md).
 
 ## Matriz de ownership de archivos
 
@@ -70,8 +86,8 @@ Después de estabilizar contratos, scanner, watcher y outbox pueden desarrollars
 - La integración confirma recepción, no finalización de indexación.
 - Sanitizers/análisis estático y tests aplicables pasan.
 - La documentación refleja las decisiones finales.
+- Cada cambio material tiene registro e índice actualizados.
 
 ## Capacidad sugerida
 
 Para agentes autónomos pueden activarse cuatro perfiles simultáneos después de cerrar contratos: núcleo, Windows, confiabilidad y QA. Integración comienza cuando el contrato y el ACK estén estables. En un equipo humano pequeño, Arquitectura puede asumir Integración y QA puede asumir portabilidad, reduciendo el equipo a cuatro personas.
-
