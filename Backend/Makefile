@@ -10,7 +10,7 @@ TESSDATA_URL=https://github.com/tesseract-ocr/tessdata_fast/raw/main/$(TESSDATA_
 
 setup-vcpkg:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '$(VCPKG_DIR)')) { git submodule update --init --recursive }; if (!(Test-Path '$(VCPKG_DIR)')) { New-Item -ItemType Directory -Force -Path 'external' | Out-Null; git clone https://github.com/microsoft/vcpkg.git '$(VCPKG_DIR)' }"
-	cd $(VCPKG_DIR) && bootstrap-vcpkg.bat
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "& '$(VCPKG_DIR)/bootstrap-vcpkg.bat'"
 
 setup-tessdata:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path '$(TESSDATA_DIR)' | Out-Null; if (!(Test-Path '$(TESSDATA_DIR)/$(TESSDATA_LANG).traineddata')) { Invoke-WebRequest -Uri '$(TESSDATA_URL)' -OutFile '$(TESSDATA_DIR)/$(TESSDATA_LANG).traineddata' }"
@@ -22,7 +22,7 @@ build: configure
 	cmake --build $(BUILD_DIR) --config $(CONFIG)
 
 run: build
-	.\$(BUILD_DIR)\$(CONFIG)\semantic_fs_backend.exe
+	./$(BUILD_DIR)/$(CONFIG)/semantic_fs_backend.exe
 
 setup: build
 
