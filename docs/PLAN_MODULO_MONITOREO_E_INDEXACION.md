@@ -1,531 +1,350 @@
-# Plan del módulo de monitoreo del sistema de archivos
+# Plan implementable del módulo de monitoreo de archivos
 
-## 1. Objetivo y frontera
+## Veredicto y objetivo
 
-Construir un servicio local y multiplataforma que descubra archivos y detecte cambios dentro de raíces configuradas. Su salida es una secuencia confiable de eventos normalizados que se entrega al orquestador.
+El módulo tiene sentido si se construye como una pieza autónoma y testeable cuya responsabilidad termina en `IFileChangeSink`. Debe observar raíces configuradas, normalizar cambios, conservarlos de forma durable y entregarlos **al menos una vez**. No debe conocer ni anticipar el diseño interno de un orquestador semántico.
 
-Este módulo **no realiza la indexación semántica**. Los extractores, limpieza, chunking, embeddings, índice vectorial y grafo pertenecen a otros módulos coordinados por el orquestador.
+El desarrollo será Windows-first, manteniendo contratos portables. La solución conserva cuatro decisiones fundamentales: watcher nativo más reconciliación, callbacks livianos, outbox durable y separación entre persistencia operativa y semántica.
 
-### Responsabilidades propias
+### Dentro del alcance
 
-- Escanear inicialmente las raíces configuradas.
-- Observar creación, modificación, eliminación, movimiento y renombre.
-- Ocultar las diferencias entre Windows, Linux y macOS.
-- Normalizar rutas, eventos y metadatos básicos.
-- Aplicar inclusiones, exclusiones y límites configurados.
-- Agrupar notificaciones repetidas y esperar estabilidad básica del archivo.
-- Detectar desbordamientos o pérdida de eventos.
-- Reconciliar periódicamente el estado observado con el disco.
-- Publicar cambios al orquestador con entrega confiable.
-- Sobrevivir reinicios sin perder eventos ya aceptados.
+- Escaneo inicial y reconciliación de raíces configuradas.
+- Observación de altas, modificaciones, eliminaciones y renombres.
+- Normalización de rutas, metadatos y eventos entre plataformas.
+- Filtros, coalescing y comprobación básica de estabilidad.
+- Catálogo operativo y outbox SQLite.
+- Recuperación tras reinicio, overflow y fallos temporales de entrega.
+- Entrega por el puerto `IFileChangeSink`.
+- Biblioteca reutilizable, ejecutable fino y pruebas automatizadas.
 
-### Responsabilidades ajenas
+### Fuera del alcance
 
-Este módulo no debe:
+- Diseñar o implementar el orquestador futuro.
+- Extracción, OCR, limpieza, chunking, embeddings, búsqueda, grafo o indexación.
+- Confirmar que un archivo fue indexado.
+- Invalidar derivados semánticos.
+- Copiar el contenido o producir snapshots inmutables en el MVP.
+- Implementar ahora el adaptador real hacia el orquestador.
 
-- seleccionar ni ejecutar extractores;
-- ejecutar OCR o transcripción;
-- limpiar contenido ni generar chunks;
-- crear embeddings;
-- actualizar el índice vectorial o el grafo;
-- decidir cómo se indexa semánticamente un documento;
-- invalidar directamente chunks, vectores o nodos derivados.
+Durante el desarrollo, `FakeFileChangeSink` y un sink de pruebas de contrato representan al consumidor. El último límite del módulo es el resultado devuelto por `IFileChangeSink`.
 
-El orquestador recibe el evento y decide qué pipeline ejecutar.
+## Ruta de implementación
 
-## 2. Observer y daemon
+1. Separar una biblioteca testeable y habilitar CTest.
+2. Definir contratos y completar un scanner one-shot con sink falso.
+3. Implementar el watcher de Windows y el protocolo de arranque seguro.
+4. Incorporar catálogo y outbox en una única frontera transaccional.
+5. Añadir recovery, reconciliación, overflow y operación observable.
+6. Dejar documentado, pero no implementar, el adaptador al orquestador futuro.
 
-La idea de un observer que opere como daemon tiene sentido, pero no debería depender exclusivamente de sondeo ni ejecutar el pipeline semántico desde el callback del sistema operativo.
+Cada paso debe cerrar con pruebas verificables antes de agregar el siguiente subsistema.
 
-La solución recomendada es híbrida:
-
-1. Un escaneo inicial descubre el estado existente.
-2. Un watcher nativo recibe cambios con baja latencia.
-3. Un normalizador convierte notificaciones del SO en eventos de dominio.
-4. Un coalescer agrupa ráfagas y versiones transitorias.
-5. Una outbox persistente conserva eventos hasta que el orquestador los acepte.
-6. Un reconciliador recupera periódicamente eventos perdidos.
-
-Observer es útil para publicar eventos dentro de la aplicación. La integración con cada SO debe modelarse mediante Adapter/Strategy: `WindowsFileWatcher` implementa `IFileWatcher` usando la API de Windows. Windows no hereda de Observer ni representa una entidad del dominio.
-
-Primero conviene desarrollar un ejecutable foreground controlable desde CLI. Cuando sea estable se empaqueta como Windows Service, servicio de systemd o LaunchDaemon.
-
-## 3. Relación con el orquestador
+## Arquitectura y frontera
 
 ```text
 Sistema de archivos
         |
         v
 +-------------------------------+
-| Módulo de monitoreo            |
-| scan + watch + normalize       |
-| filter + coalesce + reconcile  |
+| InitialScanner + IFileWatcher |
 +---------------+---------------+
-                | FileChange
+                |
                 v
 +-------------------------------+
-| IFileChangeSink                |
-| llamada directa o outbox       |
+| normalize + filter + coalesce |
+| stability + reconcile         |
 +---------------+---------------+
+                |
                 v
 +-------------------------------+
-| Orquestador                    |
-| decide y coordina el pipeline  |
-+----+----------+---------+------+
-     |          |         |
-     v          v         v
- Extractor   Chunking  Embeddings
-     |          |         |
-     +----------+---------+
+| ObservationCatalog + Outbox   |
+| transacción SQLite única       |
++---------------+---------------+
+                |
                 v
-       Persistencia / grafo
-```
-
-La dependencia apunta hacia un puerto abstracto. El watcher no conoce la clase concreta del orquestador ni los módulos que éste coordina.
-
-```cpp
-class IFileChangeSink {
-public:
-    virtual ~IFileChangeSink() = default;
-    virtual PublishResult publish(FileChange change) = 0;
-};
-```
-
-Una implementación puede llamar al orquestador en el mismo proceso. Otra puede escribir una outbox SQLite o publicar en un bus en el futuro, sin modificar los watchers.
-
-### Qué significa “dar el archivo”
-
-Por defecto, el módulo no copia ni envía todos los bytes. Entrega una referencia: ruta, identidad nativa opcional, metadatos y generación observada. El orquestador abre el archivo al procesarlo.
-
-Si se necesitara una instantánea inmutable, puede incorporarse un servicio de snapshots separado. No corresponde añadir esa complejidad al MVP sin un caso concreto.
-
-## 4. Arquitectura interna
-
-```text
-                  +-----------------------+
-                  | WatchConfig           |
-                  | raíces y políticas    |
-                  +-----------+-----------+
-                              |
-           +------------------+------------------+
-           |                                     |
- +---------v----------+                +---------v----------+
- | InitialScanner     |                | IFileWatcher       |
- | recorrido inicial  |                | adaptador del SO   |
- +---------+----------+                +---------+----------+
-           |                                     |
-           +------------------+------------------+
-                              |
-                    +---------v----------+
-                    | EventNormalizer    |
-                    +---------+----------+
-                              |
-                    +---------v----------+
-                    | PolicyFilter       |
-                    +---------+----------+
-                              |
-                    +---------v----------+
-                    | EventCoalescer     |
-                    | + StabilityProbe   |
-                    +---------+----------+
-                              |
-                    +---------v----------+
-                    | EventOutbox        |
-                    | entrega >= 1 vez   |
-                    +---------+----------+
-                              |
-                    +---------v----------+
-                    | IFileChangeSink    |
-                    | -> Orquestador     |
-                    +--------------------+
-
- InitialScanner + ObservationCatalog
-                 ^
-                 |
-       ReconciliationService
++-------------------------------+
+| IFileChangeSink               |  <- fin del módulo
++-------------------------------+
 ```
 
 ### Componentes
 
-- `InitialScanner`: recorre raíces y emite archivos descubiertos.
-- `IFileWatcher`: contrato portable para iniciar y detener observación.
-- `WindowsFileWatcher`, `LinuxFileWatcher`, `MacOsFileWatcher`: adaptadores nativos.
-- `EventNormalizer`: traduce notificaciones nativas a `FileChange`.
-- `PolicyFilter`: aplica raíces, exclusiones, extensiones y tamaño.
-- `EventCoalescer`: reduce eventos redundantes preservando la última generación.
-- `FileStabilityProbe`: evita publicar una versión todavía en escritura.
-- `ObservationCatalog`: estado mínimo para comparación y reconciliación.
-- `EventOutbox`: conserva entregas pendientes y reintentos.
-- `ReconciliationService`: compara disco y catálogo tras reinicios, overflow o por intervalo.
-- `FileMonitorService`: controla el ciclo de vida; no coordina indexación.
+| Componente | Responsabilidad |
+|---|---|
+| `InitialScanner` | Recorrer una raíz de forma cancelable y tolerante a errores. |
+| `IFileWatcher` | Iniciar, detener y reportar notificaciones nativas u overflow. |
+| `EventNormalizer` | Convertir eventos nativos en observaciones portables. |
+| `PolicyFilter` | Aplicar raíces, exclusiones, extensiones, tamaño y política de enlaces. |
+| `EventCoalescer` | Reducir ráfagas sin invertir el orden lógico aceptado. |
+| `FileStabilityProbe` | Evitar entregas prematuras durante escrituras en curso. |
+| `ObservationCatalog` | Conservar el estado operativo observado y tombstones. |
+| `EventOutbox` | Conservar entregas pendientes, leases, reintentos y estados terminales. |
+| `ReconciliationService` | Comparar catálogo y disco al iniciar, periódicamente y tras overflow. |
+| `FileMonitorService` | Ser dueño del ciclo de vida y coordinar los componentes anteriores. |
+| `IFileChangeSink` | Puerto de salida; no expone capacidades semánticas. |
 
-## 5. Contrato de salida
+Los adaptadores nativos quedan detrás de `IFileWatcher`. Los headers comunes no incluyen `windows.h`, `sys/inotify.h` ni APIs de macOS.
 
-```cpp
-enum class FileChangeKind {
-    Discovered,
-    Created,
-    Modified,
-    Removed,
-    Renamed
-};
+## Invariantes del dominio
 
-struct FileChange {
-    std::string eventId;
-    FileChangeKind kind;
-    std::filesystem::path path;
-    std::optional<std::filesystem::path> previousPath;
+Estas invariantes deben estar documentadas y cubiertas por pruebas antes de implementar persistencia.
 
-    std::optional<std::uintmax_t> size;
-    std::optional<std::filesystem::file_time_type> modifiedAt;
-    std::optional<std::string> nativeFileId;
+### Raíces, rutas e identidad
 
-    std::uint64_t generation;
-    std::chrono::system_clock::time_point observedAt;
-    std::string source; // watcher, initial_scan, reconciliation
-};
+1. Cada raíz tiene un `rootId` durable, independiente de su posición en la configuración.
+2. En el MVP se rechazan raíces superpuestas. Así, cada ruta aceptada tiene un único propietario y no genera eventos duplicados entre raíces.
+3. Una observación tiene un `observationId` opaco y durable. La ruta no es su identidad.
+4. `nativeFileId` puede correlacionar un renombre dentro del mismo volumen, pero es opcional, puede reciclarse y nunca es la única prueba de identidad.
+5. Un renombre correlacionado dentro de la misma raíz conserva `observationId` e incrementa `generation`.
+6. Sin correlación confiable, un renombre se representa como `Removed` más `Created`; no se inventa una relación.
+7. Un movimiento entre raíces se representa como `Removed` en la raíz de origen y `Discovered` en la raíz de destino.
+8. `Removed` cierra la encarnación y conserva un tombstone. Un archivo recreado en la misma ruta recibe un nuevo `observationId` y comienza en `generation = 1`.
+9. Los reinicios recuperan `rootId`, `observationId`, tombstones y última generación desde SQLite; nunca reconstruyen esas identidades desde el orden del escaneo.
 
-class IFileWatcher {
-public:
-    virtual ~IFileWatcher() = default;
-    virtual void start(const WatchConfig&, NativeEventSink) = 0;
-    virtual void stop() noexcept = 0;
-};
-```
+### Generación y evento
 
-### Reglas
+1. `generation` es un contador monotónico por `observationId`, no un reloj ni una versión de contenido.
+2. Sólo se asigna una generación cuando una observación aceptada cambia el estado durable.
+3. Dos reconciliaciones equivalentes no incrementan la generación.
+4. `eventId` se genera una sola vez al insertar el evento en la outbox, tiene restricción única y permanece idéntico en todos los reintentos.
+5. `eventId` no depende únicamente de ruta o timestamp. Puede ser un UUID persistido o una clave derivada de `rootId + observationId + generation + kind` con namespace de instalación.
+6. El orden de generaciones se serializa en el escritor SQLite. Ningún callback nativo asigna generaciones.
 
-- `eventId` permite deduplicar reintentos.
-- `generation` representa el orden lógico conocido para un archivo.
-- `previousPath` sólo se completa si el renombre pudo correlacionarse.
-- `nativeFileId` ayuda con renombres, pero no es portable ni eterno.
-- `source` permite distinguir watcher, escaneo inicial y reconciliación.
-- `Removed` no requiere que la ruta todavía exista.
-- Los eventos describen observaciones; no garantizan que esa versión siga en disco.
-- El contrato debe versionarse si cruza límites de proceso.
+## Protocolo de arranque sin ventana de pérdida
 
-## 6. Flujo por tipo de cambio
+El orden `snapshot -> watcher` es inválido: un cambio entre ambos pasos podría no aparecer en ninguno. El arranque debe seguir este protocolo:
 
-### Descubrimiento, creación o modificación
+1. Abrir el catálogo/outbox y recuperar entregas pendientes.
+2. Iniciar el watcher de cada raíz en modo bufferizado.
+3. Registrar un marcador de inicio y mantener los callbacks limitados a encolar notificaciones.
+4. Ejecutar el snapshot inicial mientras los eventos continúan acumulándose.
+5. Enviar snapshot y buffer al coordinador serializado; un overflow marca la raíz como `dirty`.
+6. Ejecutar una reconciliación de cutover contra el estado actual del disco.
+7. Drenar los eventos acumulados durante esa reconciliación hasta una barrera del watcher.
+8. Pasar a operación normal sólo cuando snapshot, reconciliación y barrera se hayan procesado.
 
-1. Scanner o watcher observa una ruta.
-2. Se normaliza y valida que permanezca dentro de una raíz autorizada.
-3. Se aplican filtros y exclusiones.
-4. Se agrupan notificaciones repetidas.
-5. Se espera estabilidad mediante tamaño y `mtime` durante una ventana configurable.
-6. Se leen metadatos sin interpretar el contenido.
-7. Se asignan `eventId` y `generation`.
-8. El evento se persiste en la outbox.
-9. Se publica mediante `IFileChangeSink`.
-10. Se marca entregado sólo cuando el receptor confirma recepción.
+El snapshot no pretende ser una fotografía atómica del sistema de archivos. La garantía es que todo cambio posterior al inicio del watcher queda representado por una notificación o por una marca `dirty` que obliga a reconciliar. La ruta serializada impide que un resultado tardío del scanner sobrescriba una observación más reciente.
 
-Después del ACK, el orquestador controla extracción, chunking, embeddings y persistencia semántica.
+Si el buffer se satura o el SO reporta overflow, el servicio no declara el arranque saludable: conserva la raíz como `dirty`, completa una nueva reconciliación y sólo entonces habilita el estado normal.
 
-### Eliminación
+## Frontera transaccional SQLite
 
-El módulo publica `Removed` con la última identidad y ruta conocidas. El orquestador decide cómo invalidar derivados. El catálogo de observación puede conservar un tombstone temporal para reconciliación y correlación.
+Para cada cambio durable, una sola transacción debe:
 
-### Renombre o movimiento
+1. leer y validar el estado actual de la observación;
+2. crear o actualizar el catálogo/tombstone;
+3. asignar la siguiente `generation`;
+4. crear el `eventId`;
+5. insertar el payload versionado en `event_outbox`.
 
-Si el SO entrega ambas rutas, se publica un `Renamed`. Si sólo se observan `Removed + Created`, el módulo puede correlacionarlos por identidad nativa y proximidad temporal. Si no es seguro, publica ambos; el orquestador debe tolerarlo.
+El commit hace visibles catálogo y evento juntos. Está prohibido avanzar `observed_files` sin insertar su evento, o insertar un evento cuya generación no coincida con el catálogo.
 
-Mover hacia fuera de una raíz equivale a eliminación; mover hacia dentro equivale a descubrimiento o creación.
+La entrega ocurre después del commit. Un ACK sólo cambia el estado de la fila de outbox a entregada; significa que el sink aceptó la responsabilidad del mensaje, **no** que el archivo fue indexado. La persistencia del monitor nunca contiene chunks, vectores, entidades ni estado semántico.
 
-### Overflow
+SQLite en modo WAL, con migraciones y `busy_timeout`, es apropiado para este daemon local. Debe existir un único escritor lógico para catálogo y outbox; los lectores y el publicador no asignan generaciones.
 
-`Overflow` es una señal interna de control, no un trabajo semántico. Programa reconciliación de la raíz. Las diferencias se publican como `FileChange` con `source = "reconciliation"`.
+## Contrato de salida y estados de entrega
 
-## 7. Consistencia con el procesamiento
+El payload persistente incluye como mínimo:
 
-Existe una carrera inevitable:
+- `schemaVersion`;
+- `eventId`, `rootId`, `observationId` y `generation`;
+- `kind`: `Discovered`, `Created`, `Modified`, `Removed` o `Renamed`;
+- ruta actual y `previousPath` opcional;
+- tamaño, modificación y `nativeFileId` opcionales;
+- `observedAt` y `source`: `watcher`, `initial_scan` o `reconciliation`.
 
-```text
-Se observa versión A
-        |
-El archivo cambia a versión B
-        |
-El orquestador abre la ruta
-```
+`IFileChangeSink::publish` devuelve uno de estos estados cerrados:
 
-Por eso se publican generación y metadatos. El orquestador verifica la versión antes y, si hace falta, después de procesar. Si cambió, descarta el resultado obsoleto o programa la versión nueva.
+| Resultado | Efecto en la outbox |
+|---|---|
+| `Accepted` | Marcar entregado. No implica indexación. |
+| `Duplicate` | Marcar entregado: el consumidor ya posee el mismo `eventId`. |
+| `RetryableFailure` | Conservar pendiente y reintentar con backoff y jitter. |
+| `Rejected` | No reintentar automáticamente; mover a dead-letter o estado terminal con causa observable. |
 
-La garantía realista es entrega **al menos una vez**:
+Los reintentos tienen límite de frecuencia, no de durabilidad: un fallo temporal no elimina el evento. La operación debe permitir inspeccionar y reactivar manualmente un dead-letter después de corregir su causa.
 
-- el monitor puede reenviar un mismo `eventId`;
-- el orquestador deduplica por `eventId`;
-- una generación menor no puede sobrescribir una mayor;
-- la reconciliación garantiza convergencia;
-- confirmar recepción no significa confirmar indexación.
+### Outbox llena
 
-`PublishResult` podría distinguir `Accepted`, `Duplicate`, `RetryableFailure` y `Rejected`. Sólo `Accepted` y `Duplicate` cierran la entrega.
+- Una cuota blanda activa backpressure: prioriza entrega, pausa scanner/reconciliación y reduce trabajo nuevo.
+- Al alcanzar la cuota dura, no se actualiza el catálogo si el evento correspondiente no puede insertarse en la misma transacción.
+- El watcher mantiene una marca `dirty` por raíz; no intenta conservar indefinidamente cada notificación en memoria.
+- El servicio pasa a estado `degraded/saturated`, expone la causa y reconcilia cuando vuelve a existir capacidad.
+- Nunca se descartan filas pendientes ni se inventan ACKs para recuperar espacio.
 
-## 8. Decisiones por sistema operativo
+## Concurrencia, ownership y cierre
 
-| Plataforma | Mecanismo | Consideraciones |
+| Recurso | Propietario y regla |
+|---|---|
+| Handle del watcher | Adaptador de plataforma; `start/stop` son idempotentes y el cierre espera callbacks en curso. |
+| Cola nativa | Acotada; el callback sólo copia datos mínimos o marca overflow/dirty. |
+| Coordinador | Un consumidor serializa normalización final, catálogo, generaciones y outbox. |
+| Scanner/reconciliador | Trabajo cancelable; entrega observaciones al coordinador, no escribe SQLite directamente. |
+| Publicador | Worker separado que toma leases de outbox y llama al sink fuera de transacciones SQLite. |
+| Relojes | `IClock` inyectable: reloj monotónico para debounce/backoff y reloj UTC para timestamps persistentes. |
+
+El shutdown sigue este orden: dejar de aceptar trabajo de control, detener watchers, cancelar escaneos, drenar hasta un límite configurado, devolver leases no confirmados a estado pendiente, hacer checkpoint si corresponde y cerrar SQLite. Al reiniciar, todo evento sin ACK vuelve a ser elegible con el mismo `eventId`.
+
+La saturación de la cola nativa nunca bloquea el callback del SO. Se marca la raíz `dirty` y se usa reconciliación para converger.
+
+## Contratos persistentes e interoperabilidad
+
+### Rutas
+
+- La ruta mostrable conserva Unicode y se persiste como UTF-8.
+- La clave de comparación se obtiene de una ruta absoluta, léxicamente normalizada y relativa a su raíz.
+- Windows aplica su semántica de comparación sin distinguir mayúsculas; Linux mantiene distinción. No se impone una regla universal.
+- La validación comprueba nuevamente la pertenencia a la raíz antes de leer metadatos y antes de publicar, reduciendo carreras TOCTOU.
+- En el MVP no se siguen symlinks, junctions ni reparse points. Se registran y omiten sin atravesarlos.
+- Errores de ACL, desapariciones durante el recorrido y archivos bloqueados afectan a esa ruta, no detienen la raíz completa.
+
+### Timestamps, payloads y enums
+
+- Los timestamps persistentes son enteros UTC con unidad explícita, por ejemplo microsegundos desde Unix epoch.
+- `std::filesystem::file_time_type` no cruza SQLite ni el puerto de salida.
+- El payload tiene `schemaVersion` y migraciones compatibles; una versión no soportada se rechaza explícitamente.
+- Los enums persistidos usan valores definidos y cerrados. Un valor desconocido no se convierte silenciosamente a un default.
+- `observedAt` describe cuándo se observó el estado; `modifiedAt` es metadato del archivo y puede faltar.
+
+### Degradación por plataforma
+
+| Plataforma | Adaptador | Semántica esperada |
 |---|---|---|
-| Windows | `ReadDirectoryChangesW` asíncrono | Renombres en pares, overflow, rutas largas, archivos bloqueados y junctions. |
-| Linux | `inotify` | Watch por directorio, límites del kernel, overflow y movimientos de árboles. |
-| macOS | FSEvents | Eventos coalescidos de árbol; requiere reexaminar el disco y manejar cursor. |
+| Windows | `ReadDirectoryChangesW` asíncrono | MVP; pares de rename cuando estén disponibles, overflow, rutas largas y reparse points. |
+| Linux | `inotify` | Requiere watches por directorio; los límites y `IN_Q_OVERFLOW` fuerzan reconciliación. |
+| macOS | FSEvents | Entrega cambios coalescidos por árbol, no equivalentes uno a uno; cursor y flags sólo indican qué debe reexaminarse. |
 
-Una biblioteca multiplataforma puede acelerar el MVP, pero debe quedar detrás de `IFileWatcher`. Ninguna abstracción elimina la reconciliación.
+No se promete equivalencia de notificaciones nativas. El contrato portable describe el estado inferido después de reexaminar el disco. Linux y macOS quedan como fases posteriores al MVP de Windows.
 
-Los headers comunes no deben incluir `windows.h`, `sys/inotify.h` ni APIs de macOS. La selección se realiza mediante factory y compilación condicional (`WIN32`, `APPLE`, `UNIX`).
+## Fundación: biblioteca testeable
 
-## 9. Consideraciones previas
+El CMake actual reúne `src/*.cpp` en un único ejecutable. Antes del monitor se debe separar el código reutilizable:
 
-### Alcance
+1. Crear el target de biblioteca `semantic_fs_core` con las fuentes reutilizables y sin `main.cpp`.
+2. Publicar `Backend/include` mediante `target_include_directories(semantic_fs_core PUBLIC ...)`.
+3. Enlazar en la biblioteca sólo sus dependencias reales; SQLite se incorpora cuando comienza la fase durable.
+4. Mantener `semantic_fs_backend` como ejecutable fino: contiene composición/configuración y enlaza `semantic_fs_core`.
+5. Sustituir el glob indiscriminado por listas de fuentes explícitas o, como transición, excluir claramente `main.cpp` de la biblioteca.
+6. Habilitar `include(CTest)`/`enable_testing()` y añadir Catch2 v3 mediante vcpkg para obtener discovery y tests aislados.
+7. Crear `semantic_fs_core_tests`, enlazado a la biblioteca, y registrar casos con CTest.
+8. Separar pruebas unitarias, de contrato de sinks/watchers e integración SQLite; las pruebas nativas de Windows se etiquetan por plataforma.
 
-- Plataformas del MVP; recomendación: Windows primero con contrato portable.
-- Raíces configurables; nunca todo el disco por defecto.
-- Extensiones admitidas según la capacidad del orquestador.
-- Exclusiones: `.git`, builds, cachés, temporales, modelos y datos de la aplicación.
-- Política para ocultos, remotos, tamaño máximo y tipos desconocidos.
-- Symlinks/junctions; recomendación inicial: no seguirlos.
-- Movimientos entre raíces y retención de tombstones.
+Esta estructura permite probar scanner, normalización, identidad, transacciones y recovery sin iniciar el backend ni enlazar el futuro orquestador. El cambio de CMake y dependencias pertenece a la primera fase de implementación; este documento no modifica el build.
 
-### Identidad y rutas
+## Persistencia operativa mínima
 
-- No usar sólo la ruta como identidad.
-- Guardar ruta normalizada para comparar y una ruta mostrable.
-- Windows suele comparar sin distinguir mayúsculas; Linux sí las distingue.
-- Considerar Unicode, rutas largas y volúmenes diferentes.
-- Usar volumen + file ID/inode cuando exista, sin tratarlo como universal.
-- No resolver enlaces de modo que se escape de raíces autorizadas.
+| Tabla | Datos esenciales |
+|---|---|
+| `watch_roots` | `root_id`, rutas mostrable/comparable, políticas, estado dirty y última reconciliación. |
+| `observed_files` | `observation_id`, `root_id`, rutas, identidad nativa opcional, metadatos, generación y tombstone. |
+| `event_outbox` | `event_id`, versión/payload, estado, intentos, lease, disponibilidad, errores y timestamps. |
+| `dead_letters` o estado terminal | Evento rechazado, causa, fecha y datos necesarios para inspección/reactivación. |
 
-### Eventos y estabilidad
+Una restricción única protege `event_id`; otra protege la combinación lógica elegida para observación/generación/tipo. Las migraciones se prueban desde una base vacía y desde la versión anterior.
 
-- Los eventos pueden duplicarse, perderse o llegar fuera de orden.
-- Los editores suelen guardar mediante temporal + rename.
-- `Created` no implica que la escritura haya terminado.
-- Debounce y estabilidad deben ser configurables, no sleeps bloqueantes.
-- Un archivo que no se estabiliza debe producir reintentos limitados y diagnóstico.
-- El hash completo normalmente pertenece al orquestador; añadirlo aquí sólo si se acuerda como parte del contrato de identidad.
+## Fases pequeñas y criterios de salida
 
-### Rendimiento
+### Fase 0 — Build y pruebas
 
-- La outbox debe tener cuotas o límites.
-- El callback nativo hace trabajo mínimo y nunca espera extracción.
-- Scanner y reconciliación soportan cancelación y recorrido incremental.
-- No se carga contenido completo en memoria.
-- Medir eventos recibidos/coalescidos, outbox, latencia, overflows y errores.
-- Aplicar backoff si el orquestador no está disponible.
+- [ ] Crear `semantic_fs_core` y mantener `semantic_fs_backend` como composición fina.
+- [ ] Habilitar CTest, framework y target de pruebas.
+- [ ] Añadir un smoke test que enlace la biblioteca.
 
-### Seguridad y privacidad
+**Salida verificable:** CMake configura; el ejecutable enlaza la biblioteca; CTest descubre y ejecuta al menos un test.
 
-- Ejecutar con mínimo privilegio.
-- No atravesar raíces autorizadas ni seguir enlaces fuera de ellas.
-- No registrar contenido; permitir redactar rutas sensibles.
-- Validar rutas nativas antes de publicarlas.
-- Proteger catálogo y outbox porque revelan ubicaciones.
-- Excluir archivos generados por la aplicación para evitar bucles.
+### Fase 1 — Contratos y scanner one-shot
 
-### Operación
+- [ ] Definir tipos persistibles, `IFileWatcher`, `IFileChangeSink`, `IClock` y resultados de publicación.
+- [ ] Implementar normalización, pertenencia a raíces y `PolicyFilter`.
+- [ ] Implementar `InitialScanner` cancelable con `FakeFileChangeSink`.
+- [ ] Probar Unicode, rutas largas, ACL, desaparición TOCTOU y enlaces/reparse points.
 
-- Cierre ordenado mediante stop token o señal.
-- Una instancia por perfil o conjunto de raíces.
-- Configuración y esquema versionados.
-- Logs estructurados con rotación.
-- Estado: watchers activos, última reconciliación, outbox y último error.
-- Al reiniciar, recuperar entregas pendientes sin inventar ACKs.
+**Salida verificable:** una raíz de fixture entrega sólo archivos admitidos al fake sink, sin dependencias semánticas.
 
-## 10. Persistencia exclusiva del módulo
+### Fase 2 — Watcher Windows y arranque seguro
 
-El módulo puede necesitar persistencia operativa, pero no debe apropiarse del almacenamiento semántico.
+- [ ] Implementar `WindowsFileWatcher` asíncrono con cola acotada y cancelación.
+- [ ] Implementar buffer, barreras, snapshot, cutover y marca dirty.
+- [ ] Correlacionar renombres sólo con evidencia suficiente.
+- [ ] Probar cambios durante el snapshot, ráfagas, overflow y shutdown.
 
-### `watch_roots`
+**Salida verificable:** ningún cambio inyectado en las ventanas del arranque queda sin evento o reconciliación pendiente.
 
-- `id`, ruta mostrable y normalizada;
-- recursividad y seguimiento de enlaces;
-- filtros, exclusiones y estado;
-- cursor nativo opcional y última reconciliación.
+### Fase 3 — Catálogo/outbox transaccionales y recovery
 
-### `observed_files`
+- [ ] Añadir SQLite, migraciones, WAL y escritor único.
+- [ ] Implementar la transacción catálogo-generación-evento.
+- [ ] Implementar leases, ACK, backoff, dead-letter y cuota.
+- [ ] Probar crash antes/después del commit y antes/después del ACK.
 
-- `observation_id`, `root_id`;
-- `display_path`, `normalized_path`;
-- `native_file_id` opcional, tamaño y `mtime`;
-- última generación, `last_seen_at` y tombstone opcional.
+**Salida verificable:** tras cada crash simulado, catálogo y outbox son coherentes; un evento pendiente conserva su `eventId`.
 
-Este catálogo representa lo observado, no el estado de indexación.
+### Fase 4 — Reconciliación y robustez operativa
 
-### `event_outbox`
+- [ ] Implementar coalescing y estabilidad con reloj inyectable.
+- [ ] Reconciliar al iniciar, por intervalo, tras overflow y tras saturación.
+- [ ] Implementar tombstones, delete+recreate y movimientos entre raíces.
+- [ ] Exponer métricas, health y status verificables.
 
-- `event_id`, payload y versión del contrato;
-- `state`, `attempts`, `available_at`, `lease_until`;
-- `created_at`, `delivered_at`, `last_error`;
-- clave de deduplicación por observación/generación/tipo.
+**Salida verificable:** después de pérdida simulada de eventos, el catálogo converge con el disco y cada diferencia durable tiene una fila de outbox.
 
-SQLite en modo WAL es apropiado para un daemon local. Las tablas de archivos indexados, chunks, vectores, entidades y grafo pertenecen a la persistencia semántica del orquestador.
+### Fase posterior — Adaptador al orquestador
 
-## 11. Encaje con el repositorio
+No pertenece al alcance actual. Cuando exista un contrato real del orquestador, se implementará un adaptador de `IFileChangeSink` y se ejecutarán pruebas de contrato. El módulo no debe cambiar su watcher ni su persistencia para acomodar detalles semánticos.
 
-El repositorio ya separa extractores, chunking, embeddings, storage y search. Este módulo debe permanecer en `scanner/` o renombrarse a `monitoring/`. No debe incorporar un `IndexCoordinator`.
+## Observabilidad y operación
 
-```text
-Backend/include/semantic_fs/scanner/
-  file_change.h
-  watch_config.h
-  i_file_watcher.h
-  i_file_change_sink.h
-  initial_scanner.h
-  event_normalizer.h
-  policy_filter.h
-  event_coalescer.h
-  file_stability_probe.h
-  observation_catalog.h
-  event_outbox.h
-  reconciliation_service.h
-  file_monitor_service.h
-  file_watcher_factory.h
-  windows_file_watcher.h
-  linux_file_watcher.h
+Las siguientes señales deben ser consultables y tener criterios objetivos:
 
-Backend/src/scanner/
-  initial_scanner.cpp
-  event_normalizer.cpp
-  policy_filter.cpp
-  event_coalescer.cpp
-  file_stability_probe.cpp
-  observation_catalog.cpp
-  event_outbox.cpp
-  reconciliation_service.cpp
-  file_monitor_service.cpp
-  file_watcher_factory.cpp
-  windows_file_watcher.cpp
-  linux_file_watcher.cpp
-```
+| Señal | Criterio |
+|---|---|
+| Health de raíz | `healthy` sólo si watcher activo, arranque completado y raíz no dirty/saturated. |
+| Outbox | Conteos por estado, edad del pendiente más antiguo y uso de cuota. |
+| Reconciliación | Último inicio/fin, duración, resultado y motivo. |
+| Watcher | Eventos recibidos/coalescidos, overflows y profundidad máxima de cola. |
+| Entrega | Latencia, Accepted/Duplicate/Retryable/Rejected y próximo reintento. |
+| Error | Último error por componente sin registrar contenido ni rutas sensibles completas. |
 
-El orquestador implementa o recibe una implementación de `IFileChangeSink`. Esa es la frontera entre módulos:
+`status` debe indicar explícitamente si el servicio sigue convergiendo, está saturado o requiere intervención por dead-letters. Un proceso vivo no equivale a un monitor saludable.
 
-```text
-scanner -> IFileChangeSink <- orchestrator
-                              |
-                              +-> extractors
-                              +-> processing
-                              +-> chunking
-                              +-> embeddings
-                              +-> storage/graph
-```
+## Pruebas de aceptación imprescindibles
 
-## 12. Lista de tareas
+- [ ] El watcher empieza antes del snapshot y los cambios durante el arranque convergen.
+- [ ] Dos reconciliaciones sin cambios no crean generaciones ni eventos nuevos.
+- [ ] Catálogo, generación y outbox se confirman o revierten juntos.
+- [ ] Un reinicio antes del ACK reenvía el mismo `eventId`.
+- [ ] `Accepted` y `Duplicate` cierran la entrega; `RetryableFailure` reintenta; `Rejected` termina en dead-letter.
+- [ ] Una outbox llena no avanza el catálogo sin evento y deja la raíz dirty/saturated.
+- [ ] Una escritura lenta no publica una versión transitoria.
+- [ ] Un guardado `temp -> rename` converge al archivo final.
+- [ ] Delete+recreate crea otra identidad; rename correlacionado conserva identidad.
+- [ ] Un movimiento entre raíces produce salida en cada raíz sin duplicación.
+- [ ] Overflow, caída del sink y crash convergen después de recovery.
+- [ ] ACL, archivos bloqueados, TOCTOU y reparse points no detienen otras rutas ni escapan de la raíz.
+- [ ] El módulo compila y se prueba con `FakeFileChangeSink`, sin headers ni bibliotecas semánticas.
 
-### Fase 0 — Frontera y contrato
+## Decisiones de arquitectura pendientes
 
-- [ ] Confirmar que el módulo termina al entregar `FileChange` al orquestador.
-- [ ] Definir plataformas, raíces, inclusiones, exclusiones, tamaño y symlinks.
-- [ ] Crear `FileChangeKind`, `FileChange`, `WatchConfig` e `IFileWatcher`.
-- [ ] Crear `IFileChangeSink` y resultados de confirmación/reintento.
-- [ ] Definir `eventId`, `generation`, renombre y eliminación.
-- [ ] Documentar entrega al menos una vez y deduplicación del orquestador.
-- [ ] Acordar rutas/metadatos frente a snapshots; usar rutas para el MVP.
+Antes de cada fase se debe registrar una ADR breve; no es necesario resolver decisiones del orquestador.
 
-**Criterio de salida:** el contrato funciona con un sink falso sin enlazar extractores, chunking ni storage semántico.
+| ADR | Decisión que debe cerrar |
+|---|---|
+| Identidad y generación | `rootId`, `observationId`, tombstones, recreación, correlación de rename y formato de `eventId`. |
+| Protocolo de arranque | Buffer, barreras, cutover, overflow y condición para declarar una raíz saludable. |
+| Concurrencia y ownership | Hilos, capacidad de colas, escritor SQLite, leases, cancelación y shutdown. |
+| Transacción catálogo-outbox | Límites de la transacción, restricciones únicas, ACK, recovery y comportamiento de cuota. |
 
-### Fase 1 — Escaneo y políticas
+## Checklist de límite arquitectónico
 
-- [ ] Implementar normalización de rutas por plataforma.
-- [ ] Validar pertenencia a raíces autorizadas.
-- [ ] Implementar `PolicyFilter` y exclusiones de archivos de la aplicación.
-- [ ] Implementar `InitialScanner` recursivo, cancelable y tolerante a errores.
-- [ ] Definir identidad de observación y generación.
-- [ ] Probar Unicode, rutas largas, permisos y enlaces.
+- [ ] El código reusable vive en `semantic_fs_core` y no depende de `main.cpp`.
+- [ ] El módulo termina en `IFileChangeSink`.
+- [ ] Las pruebas usan fake/contract sinks; no simulan un orquestador semántico.
+- [ ] Los callbacks nativos no realizan I/O de SQLite ni procesamiento pesado.
+- [ ] Toda observación durable y su evento se escriben atómicamente.
+- [ ] La entrega es al menos una vez y un ACK no significa indexación.
+- [ ] Reconciliación es obligatoria; ninguna plataforma depende sólo de su watcher.
+- [ ] La persistencia operativa no contiene datos semánticos.
+- [ ] Linux/macOS se agregan detrás del mismo contrato después del MVP Windows.
 
-**Criterio de salida:** se publican exactamente los archivos admitidos sin interpretar contenido ni escapar de las raíces.
-
-### Fase 2 — Entrega confiable
-
-- [ ] Añadir SQLite y migraciones al build/vcpkg.
-- [ ] Implementar `watch_roots`, `observed_files` y `event_outbox`.
-- [ ] Configurar WAL, busy timeout y migraciones.
-- [ ] Implementar publicación con ACK y deduplicación por `eventId`.
-- [ ] Implementar lease, reintentos y backoff.
-- [ ] Recuperar eventos pendientes después de reiniciar.
-- [ ] Probar sink directo y sink respaldado por outbox.
-
-**Criterio de salida:** un reinicio o fallo del orquestador no pierde eventos ni los marca como indexados.
-
-### Fase 3 — Coalescing y estabilidad
-
-- [ ] Implementar `EventCoalescer` por identidad y generación.
-- [ ] Implementar `FileStabilityProbe` con tamaño y `mtime`.
-- [ ] Hacer configurables debounce, timeout y reintentos.
-- [ ] Modelar guardados atómicos y temporales.
-- [ ] Impedir que una generación vieja se publique después de una nueva.
-- [ ] Probar escrituras lentas y ráfagas.
-
-**Criterio de salida:** notificaciones transitorias producen una entrega útil de la última versión observada.
-
-### Fase 4 — Watcher de Windows (MVP)
-
-- [ ] Implementar `WindowsFileWatcher` con `ReadDirectoryChangesW` asíncrono.
-- [ ] Observar subdirectorios y soportar cancelación limpia.
-- [ ] Correlacionar pares de renombre.
-- [ ] Detectar overflow y programar reconciliación.
-- [ ] Tratar rutas largas, bloqueos y junctions según política.
-- [ ] Añadir pruebas para Created/Modified/Removed/Renamed.
-
-**Criterio de salida:** los cambios se convierten en `FileChange` portables sin invocar módulos semánticos.
-
-### Fase 5 — Reconciliación y robustez
-
-- [ ] Implementar `ObservationCatalog` con snapshot mínimo.
-- [ ] Reconciliar al inicio, por intervalo y después de overflow.
-- [ ] Publicar diferencias con `source = reconciliation`.
-- [ ] Gestionar tombstones y movimientos entre raíces.
-- [ ] Añadir cuotas y backpressure.
-- [ ] Añadir métricas, logs y comando de estado.
-- [ ] Simular crashes y pérdida de eventos.
-
-**Criterio de salida:** tras overflow, tiempo offline o crash, el módulo converge con el disco y entrega diferencias.
-
-### Fase 6 — Integración con el orquestador
-
-- [ ] Implementar el adaptador `IFileChangeSink -> Orchestrator`.
-- [ ] Verificar deduplicación de `eventId` en el orquestador.
-- [ ] Verificar rechazo de generaciones obsoletas.
-- [ ] Definir respuesta ante ruta desaparecida, versión distinta o inaccesible.
-- [ ] Probar los cinco tipos de cambio de extremo a extremo.
-- [ ] Confirmar que scanner no importa headers de extractores, chunking, embeddings o grafo.
-
-**Criterio de salida:** el orquestador recibe cambios confiables y conserva el control exclusivo del pipeline semántico.
-
-### Fase 7 — Multiplataforma y daemon
-
-- [ ] Implementar `LinuxFileWatcher` con inotify.
-- [ ] Implementar `MacOsFileWatcher` con FSEvents si entra en alcance.
-- [ ] Ejecutar las mismas pruebas de contrato en cada plataforma.
-- [ ] Añadir CLI: `scan`, `watch`, `reconcile` y `status`.
-- [ ] Empaquetar como Windows Service/systemd/launchd.
-- [ ] Documentar instalación, recuperación y desinstalación.
-
-**Criterio de salida:** el servicio inicia automáticamente, se detiene limpiamente y conserva entregas pendientes.
-
-## 13. Pruebas imprescindibles
-
-- El escaneo inicial entrega todos los archivos admitidos.
-- Dos reconciliaciones sin cambios no generan nuevas versiones.
-- Una escritura lenta no publica prematuramente una versión transitoria.
-- Diez modificaciones rápidas dejan prevalecer la última generación.
-- Un guardado `temp -> rename` identifica el archivo final.
-- Un renombre publica `Renamed` cuando puede correlacionarse.
-- Un movimiento hacia fuera/dentro publica eliminación/descubrimiento.
-- Un reinicio antes del ACK reenvía el mismo `eventId`.
-- Con el orquestador caído, la outbox conserva y reintenta.
-- Un overflow simulado dispara reconciliación.
-- Un archivo sin permisos no detiene otros eventos.
-- Un symlink/junction cíclico no escapa de la raíz ni genera bucles.
-- El módulo compila con un sink falso sin dependencias semánticas.
-
-## 14. Primer incremento recomendado
-
-El primer incremento valida únicamente la frontera filesystem-orquestador en Windows:
-
-1. Definir `FileChange`, `IFileWatcher` e `IFileChangeSink`.
-2. Escanear una raíz con filtros y un sink falso.
-3. Implementar SQLite para catálogo de observación y outbox.
-4. Implementar `WindowsFileWatcher` alimentando la misma ruta de eventos.
-5. Añadir coalescing, estabilidad y reconciliación manual.
-6. Conectar un adaptador mínimo al orquestador.
-7. Probar entrega, deduplicación y generaciones obsoletas.
-
-El éxito del módulo se mide por si describe de forma confiable lo ocurrido en el filesystem, no por si extrae o busca contenido. Esa responsabilidad comienza después de `IFileChangeSink` y pertenece al orquestador.
+El éxito del módulo se mide por describir y entregar de forma durable lo ocurrido en las raíces observadas. Todo procesamiento del contenido comienza después de `IFileChangeSink` y queda deliberadamente fuera de este plan.
