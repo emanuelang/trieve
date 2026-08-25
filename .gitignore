@@ -83,3 +83,6 @@ models/
 *.safetensors
 *.pt
 *.pth
+
+# Local agent skill registry
+.atl/
