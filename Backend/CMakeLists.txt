@@ -5,6 +5,8 @@ project(semantic_fs_backend)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(CTest)
+
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
@@ -20,23 +22,61 @@ else()
     message(FATAL_ERROR "Tesseract target not found")
 endif()
 
-file(GLOB_RECURSE SOURCES
-    src/*.cpp
+set(SEMANTIC_FS_CORE_SOURCES
+    src/chunking/chunker.cpp
+    src/embeddings/embedding.cpp
+    src/extractors/extractor_factory.cpp
+    src/extractors/image_extractor.cpp
+    src/extractors/pdf_extractor.cpp
+    src/extractors/tesseract_ocr_extractor.cpp
+    src/extractors/text_extractor.cpp
+    src/processing/text_cleaner.cpp
+    src/scanner/scanner.cpp
+    src/search/semantic_search.cpp
+    src/storage/chunks.cpp
+    src/storage/database.cpp
+    src/storage/files.cpp
+    src/storage/vectors.cpp
+)
+
+add_library(semantic_fs_core STATIC
+    ${SEMANTIC_FS_CORE_SOURCES}
+)
+
+target_include_directories(semantic_fs_core
+    PUBLIC
+    include
+)
+
+target_link_libraries(semantic_fs_core
+    PUBLIC
+    ${TESSERACT_TARGET}
 )
 
 add_executable(semantic_fs_backend
-    ${SOURCES}
-)
-
-target_include_directories(semantic_fs_backend
-    PRIVATE
-    include
+    src/app/main.cpp
 )
 
 target_link_libraries(semantic_fs_backend
     PRIVATE
+    semantic_fs_core
     fmt::fmt
     spdlog::spdlog
-    nlohmann_json::nlohmann_json
-    ${TESSERACT_TARGET}
 )
+
+if(BUILD_TESTING)
+    find_package(Catch2 3 CONFIG REQUIRED)
+    include(Catch)
+
+    add_executable(semantic_fs_core_tests
+        tests/extractors/image_extractor_smoke_test.cpp
+    )
+
+    target_link_libraries(semantic_fs_core_tests
+        PRIVATE
+        semantic_fs_core
+        Catch2::Catch2WithMain
+    )
+
+    catch_discover_tests(semantic_fs_core_tests)
+endif()

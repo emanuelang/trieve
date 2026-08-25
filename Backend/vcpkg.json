@@ -2,6 +2,7 @@
   "name": "semantic-fs-backend",
   "version-string": "0.1.0",
   "dependencies": [
+    "catch2",
     "fmt",
     "spdlog",
     "nlohmann-json",

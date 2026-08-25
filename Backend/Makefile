@@ -8,7 +8,7 @@ TESSDATA_DIR=tessdata
 TESSDATA_LANG=eng
 TESSDATA_URL=https://github.com/tesseract-ocr/tessdata_fast/raw/main/$(TESSDATA_LANG).traineddata
 
-.PHONY: setup-vcpkg setup-tessdata configure build run setup clean
+.PHONY: setup-vcpkg setup-tessdata configure build test run setup clean
 
 setup-vcpkg:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '$(VCPKG_DIR)')) { git submodule update --init --recursive }; if (!(Test-Path '$(VCPKG_DIR)')) { New-Item -ItemType Directory -Force -Path 'external' | Out-Null; git clone https://github.com/microsoft/vcpkg.git '$(VCPKG_DIR)' }"
@@ -22,6 +22,9 @@ configure: setup-vcpkg setup-tessdata
 
 build: configure
 	cmake --build $(BUILD_DIR) --config $(CONFIG)
+
+test: build
+	ctest --test-dir $(BUILD_DIR) -C $(CONFIG) --output-on-failure --no-tests=error
 
 run: build
 	./$(BUILD_DIR)/$(CONFIG)/semantic_fs_backend.exe
