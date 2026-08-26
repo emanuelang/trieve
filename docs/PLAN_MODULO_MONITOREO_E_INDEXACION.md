@@ -26,12 +26,12 @@ El desarrollo será Windows-first, manteniendo contratos portables. La solución
 - Copiar el contenido o producir snapshots inmutables en el MVP.
 - Implementar ahora el adaptador real hacia el orquestador.
 
-Durante el desarrollo, `FakeFileChangeSink` y un sink de pruebas de contrato representan al consumidor. El último límite del módulo es el resultado devuelto por `IFileChangeSink`.
+Durante el escaneo inicial, `FakeFileObservationSink` representa al coordinador pre-durable: recibe `FileObservation` sin IDs durables ni generación. `IFileChangeSink` conserva el límite post-outbox para cambios durables; el scanner no lo invoca.
 
 ## Ruta de implementación
 
 1. Separar una biblioteca testeable y habilitar CTest.
-2. Definir contratos y completar un scanner one-shot con sink falso.
+2. Definir contratos y completar un scanner one-shot con `IFileObservationSink` falso; reservar `IFileChangeSink` para el publicador post-outbox.
 3. Implementar el watcher de Windows y el protocolo de arranque seguro.
 4. Incorporar catálogo y outbox en una única frontera transaccional.
 5. Añadir recovery, reconciliación, overflow y operación observable.
@@ -255,12 +255,12 @@ Una restricción única protege `event_id`; otra protege la combinación lógica
 
 ### Fase 1 — Contratos y scanner one-shot
 
-- [ ] Definir tipos persistibles, `IFileWatcher`, `IFileChangeSink`, `IClock` y resultados de publicación.
+- [ ] Definir tipos persistibles, `IFileWatcher`, `IFileObservationSink`, `IFileChangeSink`, `IClock` y resultados cerrados.
 - [ ] Implementar normalización, pertenencia a raíces y `PolicyFilter`.
-- [ ] Implementar `InitialScanner` cancelable con `FakeFileChangeSink`.
+- [ ] Implementar `InitialScanner` cancelable con `FakeFileObservationSink`; `IFileChangeSink` permanece post-outbox.
 - [ ] Probar Unicode, rutas largas, ACL, desaparición TOCTOU y enlaces/reparse points.
 
-**Salida verificable:** una raíz de fixture entrega sólo archivos admitidos al fake sink, sin dependencias semánticas.
+**Salida verificable:** una raíz de fixture entrega sólo `FileObservation` admitidos al fake pre-durable, sin IDs durables, generación ni dependencias semánticas.
 
 ### Fase 2 — Watcher Windows y arranque seguro
 
@@ -322,7 +322,7 @@ Las siguientes señales deben ser consultables y tener criterios objetivos:
 - [ ] Un movimiento entre raíces produce salida en cada raíz sin duplicación.
 - [ ] Overflow, caída del sink y crash convergen después de recovery.
 - [ ] ACL, archivos bloqueados, TOCTOU y reparse points no detienen otras rutas ni escapan de la raíz.
-- [ ] El módulo compila y se prueba con `FakeFileChangeSink`, sin headers ni bibliotecas semánticas.
+- [ ] El scanner compila y se prueba con `FakeFileObservationSink`; `IFileChangeSink` sólo se prueba como puerto post-outbox, sin headers ni bibliotecas semánticas.
 
 ## Decisiones de arquitectura pendientes
 
@@ -338,7 +338,7 @@ Antes de cada fase se debe registrar una ADR breve; no es necesario resolver dec
 ## Checklist de límite arquitectónico
 
 - [ ] El código reusable vive en `semantic_fs_core` y no depende de `main.cpp`.
-- [ ] El módulo termina en `IFileChangeSink`.
+- [ ] `InitialScanner` termina en `IFileObservationSink`; el módulo durable termina en `IFileChangeSink` después del outbox.
 - [ ] Las pruebas usan fake/contract sinks; no simulan un orquestador semántico.
 - [ ] Los callbacks nativos no realizan I/O de SQLite ni procesamiento pesado.
 - [ ] Toda observación durable y su evento se escriben atómicamente.

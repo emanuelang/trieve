@@ -6,7 +6,7 @@ Consultar [README.md](README.md) antes de reservar un identificador o crear un r
 
 ## Próximo identificador
 
-`MON-001`
+`MON-002`
 
 Al reservarlo, incrementar inmediatamente este valor para evitar que dos agentes usen el mismo ID.
 
@@ -14,4 +14,4 @@ Al reservarlo, incrementar inmediatamente este valor para evitar que dos agentes
 
 | ID | Fecha | Tipo | Perfil | Estado | Título | Documento |
 |---|---|---|---|---|---|---|
-| — | — | — | — | — | Aún no hay cambios registrados | — |
+| MON-001 | 2026-08-25 | feature | architecture | en progreso | Contratos de monitoreo y escaneo inicial one-shot | [Registro](2026-08-25__architecture__feature__monitoring-contracts-and-initial-scanner.md) |

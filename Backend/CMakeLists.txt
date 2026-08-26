@@ -70,6 +70,7 @@ if(BUILD_TESTING)
 
     add_executable(semantic_fs_core_tests
         tests/extractors/image_extractor_smoke_test.cpp
+        tests/monitoring/contracts_compile_test.cpp
     )
 
     target_link_libraries(semantic_fs_core_tests
