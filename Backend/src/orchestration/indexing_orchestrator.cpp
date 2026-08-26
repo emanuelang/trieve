@@ -11,6 +11,15 @@ IndexingOrchestrator::IndexingOrchestrator(
 {
 }
 
+IndexingOrchestrator::FileDocument IndexingOrchestrator::createDocument(
+    const std::filesystem::path& filePath
+) const
+{
+    FileDocument document(filePath);
+    document.refreshMetadataFromDisk();
+    return document;
+}
+
 bool IndexingOrchestrator::canIndex(const FileDocument& file) const
 {
     return extractorFactory_.supports(file);
@@ -34,6 +43,13 @@ IndexingOrchestrator::FileDocument IndexingOrchestrator::indexFile(FileDocument 
     }
 
     return file;
+}
+
+IndexingOrchestrator::FileDocument IndexingOrchestrator::indexPath(
+    const std::filesystem::path& filePath
+) const
+{
+    return indexFile(createDocument(filePath));
 }
 
 } // namespace semantic_fs::orchestration

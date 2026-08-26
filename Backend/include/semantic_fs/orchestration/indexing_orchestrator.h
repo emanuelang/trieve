@@ -4,6 +4,8 @@
 #include "semantic_fs/extractors/extraction_types.h"
 #include "semantic_fs/extractors/extractor_factory.h"
 
+#include <filesystem>
+
 namespace semantic_fs::orchestration {
 
 // IndexingOrchestrator coordina el caso de uso "indexar archivo".
@@ -17,6 +19,11 @@ public:
     IndexingOrchestrator() = default;
     explicit IndexingOrchestrator(semantic_fs::extractors::ExtractorFactory extractorFactory);
 
+    // Crea el objeto documento a partir de una ruta recibida desde afuera.
+    // Hoy lo usa main como prueba; en el futuro puede llamarlo el modulo que
+    // recibe metadata desde el sistema operativo.
+    FileDocument createDocument(const std::filesystem::path& filePath) const;
+
     // Devuelve true si existe un extractor compatible con el archivo.
     bool canIndex(const FileDocument& file) const;
 
@@ -27,6 +34,10 @@ public:
     // recibe un FileDocument, ejecuta el extractor correcto y agrega los
     // segmentos extraidos como contextos del archivo.
     FileDocument indexFile(FileDocument file) const;
+
+    // Atajo para la prueba actual: recibe una ruta, crea FileDocument y lo
+    // pasa por el flujo minimo de indexacion.
+    FileDocument indexPath(const std::filesystem::path& filePath) const;
 
 private:
     semantic_fs::extractors::ExtractorFactory extractorFactory_;

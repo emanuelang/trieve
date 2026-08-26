@@ -1,8 +1,10 @@
 #pragma once
 
 #include "semantic_fs/extractors/i_content_extractor.h"
+#include "semantic_fs/language/i_language_detector.h"
 
 #include <filesystem>
+#include <memory>
 #include <string>
 
 namespace semantic_fs::extractors {
@@ -13,7 +15,8 @@ public:
     // "spa" o "eng+spa". tessdataPath apunta a la carpeta con archivos .traineddata.
     explicit TesseractOcrExtractor(
         std::string language = "eng",
-        std::string tessdataPath = ""
+        std::string tessdataPath = "",
+        std::shared_ptr<semantic_fs::language::ILanguageDetector> languageDetector = nullptr
     );
 
     // Implementacion polimorfica: recibe ContentInput y devuelve un segmento de texto.
@@ -31,6 +34,7 @@ private:
     // Configuracion que se pasa a TessBaseAPI::Init en cada extraccion.
     std::string language_;
     std::string tessdataPath_;
+    std::shared_ptr<semantic_fs::language::ILanguageDetector> languageDetector_;
 };
 
 } // namespace semantic_fs::extractors

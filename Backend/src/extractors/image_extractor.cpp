@@ -1,5 +1,7 @@
 #include "semantic_fs/extractors/image_extractor.h"
 
+#include "semantic_fs/extractors/tesseract_ocr_extractor.h"
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -28,6 +30,16 @@ ExtractionResult ImageExtractor::extract(const std::filesystem::path& filePath) 
     ExtractionResult result;
     result.originalPath = filePath;
     result.fileType = FileType::Image;
+
+    // Primera version funcional: una imagen genera contexto textual mediante OCR.
+    // TesseractOcrExtractor etiqueta tambien el idioma detectado del texto.
+    const TesseractOcrExtractor ocrExtractor("eng", "tessdata");
+    const ContentInput input {
+        .type = ContentType::Image,
+        .path = filePath,
+        .source = name()
+    };
+    result.segments.push_back(ocrExtractor.extract(input));
 
     return result;
 }

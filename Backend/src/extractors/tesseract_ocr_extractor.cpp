@@ -1,5 +1,7 @@
 #include "semantic_fs/extractors/tesseract_ocr_extractor.h"
 
+#include "semantic_fs/language/cld3_language_detector.h"
+
 #include <leptonica/allheaders.h>
 #include <tesseract/baseapi.h>
 
@@ -37,11 +39,17 @@ struct TextDestroyer {
 
 TesseractOcrExtractor::TesseractOcrExtractor(
     std::string language,
-    std::string tessdataPath
+    std::string tessdataPath,
+    std::shared_ptr<semantic_fs::language::ILanguageDetector> languageDetector
 )
     // Se mueven los strings para guardar la configuracion sin copias extra.
     : language_(std::move(language)),
-      tessdataPath_(std::move(tessdataPath))
+      tessdataPath_(std::move(tessdataPath)),
+      languageDetector_(
+          languageDetector
+              ? std::move(languageDetector)
+              : std::make_shared<semantic_fs::language::Cld3LanguageDetector>()
+      )
 {
 }
 
@@ -55,13 +63,21 @@ ExtractedSegment TesseractOcrExtractor::extract(const ContentInput& input) const
 
     // Convertimos la imagen a texto y empaquetamos el resultado como segmento.
     // page/timestamp se conservan para futuros casos: PDF escaneado o video.
-    return {
+    auto segment = ExtractedSegment {
         .text = extractText(input.path),
         .source = name(),
         .contentType = ContentType::Text,
         .page = input.page,
         .timestamp = input.timestamp
     };
+
+    if (languageDetector_) {
+        const auto language = languageDetector_->detect(segment.text);
+        segment.detectedLanguage = language.languageCode;
+        segment.languageConfidence = language.confidence;
+    }
+
+    return segment;
 }
 
 bool TesseractOcrExtractor::supports(const ContentInput& input) const
