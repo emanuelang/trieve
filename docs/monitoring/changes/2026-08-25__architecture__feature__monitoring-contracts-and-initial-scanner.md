@@ -30,3 +30,10 @@ No se implementan rutas, política, adaptadores nativos, watcher, scanner, SQLit
 
 - [ ] Implementar semántica de rutas y política neutral.
 - [ ] Implementar `InitialScanner` y completar la evidencia de Fase 1.
+
+## Evidencia observada — Unidad 2
+
+- `ctest --test-dir Backend/build -C Debug --output-on-failure --no-tests=error -R path_policy`: PASS, 2/2 pruebas, 0.12 s.
+- `ctest --test-dir Backend/build -C Debug --output-on-failure --no-tests=error -R native_file_system_view`: PASS, 1/1 prueba, 0.07 s (Windows).
+- `make -C Backend test`: PASS; configuración, build Debug y CTest completados, 7/7 pruebas, 0.40 s.
+- La disponibilidad nativa queda publicada como `SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE=1` en Windows y `0` fuera de Windows, sin adaptador POSIX sustituto.

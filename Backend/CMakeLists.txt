@@ -32,12 +32,22 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/extractors/text_extractor.cpp
     src/processing/text_cleaner.cpp
     src/scanner/scanner.cpp
+    src/scanner/path_policy.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
     src/storage/files.cpp
     src/storage/vectors.cpp
 )
+
+set(SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE OFF)
+if(WIN32)
+    set(SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE ON)
+    list(APPEND SEMANTIC_FS_CORE_SOURCES
+        src/scanner/windows_path_semantics.cpp
+        src/scanner/windows_file_system_view.cpp
+    )
+endif()
 
 add_library(semantic_fs_core STATIC
     ${SEMANTIC_FS_CORE_SOURCES}
@@ -47,6 +57,7 @@ target_include_directories(semantic_fs_core
     PUBLIC
     include
 )
+target_compile_definitions(semantic_fs_core PUBLIC SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE=$<BOOL:${SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE}>)
 
 target_link_libraries(semantic_fs_core
     PUBLIC
@@ -71,7 +82,11 @@ if(BUILD_TESTING)
     add_executable(semantic_fs_core_tests
         tests/extractors/image_extractor_smoke_test.cpp
         tests/monitoring/contracts_compile_test.cpp
+        tests/monitoring/path_policy_test.cpp
     )
+    if(WIN32)
+        target_sources(semantic_fs_core_tests PRIVATE tests/monitoring/native_file_system_view_test.cpp)
+    endif()
 
     target_link_libraries(semantic_fs_core_tests
         PRIVATE

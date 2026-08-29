@@ -1,0 +1,7 @@
+#include "semantic_fs/monitoring/path_policy.h"
+namespace semantic_fs::monitoring {
+bool PathPolicy::owns(const AbsolutePath& root, const AbsolutePath& candidate) const { return paths_.relativeTo(root, candidate).has_value(); }
+bool PathPolicy::rootsOverlap(const AbsolutePath& left, const AbsolutePath& right) const { return owns(left, right) || owns(right, left); }
+bool PathPolicy::startsWith(const std::vector<std::string>& value, const std::vector<std::string>& prefix) const { if (prefix.size() > value.size()) return false; for (std::size_t index = 0; index < prefix.size(); ++index) if (paths_.compareComponent(value[index], prefix[index]) != 0) return false; return true; }
+bool PathPolicy::admits(FileSystemEntryKind kind, const RelativePath& path, std::optional<std::uint64_t> size, const PolicyFilterConfig& config) const { if (kind != FileSystemEntryKind::RegularFile || (config.maximumSize && size && *size > *config.maximumSize)) return false; for (const auto& prefix : config.excludedRelativePrefixes) if (startsWith(path.components, prefix.components)) return false; if (config.extensions.empty()) return true; const auto dot = path.utf8.find_last_of('.'); const auto extension = dot == std::string::npos ? std::string_view{} : std::string_view(path.utf8).substr(dot); for (const auto& allowed : config.extensions) if (paths_.compareComponent(extension, allowed) == 0) return true; return false; }
+} // namespace semantic_fs::monitoring
