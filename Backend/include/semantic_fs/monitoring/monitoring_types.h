@@ -9,7 +9,7 @@
 
 namespace semantic_fs::monitoring {
 
-inline bool isValidUtf8(std::string_view value)
+inline bool isValidUtf8(std::string_view value) noexcept
 {
     for (std::size_t index = 0; index < value.size();) {
         const auto byte = static_cast<unsigned char>(value[index]);
@@ -46,9 +46,13 @@ inline bool isValidUtf8(std::string_view value)
 template <typename Tag>
 class OpaqueId {
 public:
+    [[nodiscard]] static bool isValid(std::string_view value) noexcept
+    {
+        return !value.empty() && isValidUtf8(value);
+    }
     static std::optional<OpaqueId> create(std::string_view value)
     {
-        if (value.empty() || !isValidUtf8(value)) return std::nullopt;
+        if (!isValid(value)) return std::nullopt;
         return OpaqueId(std::string(value));
     }
     [[nodiscard]] std::string_view value() const { return value_; }

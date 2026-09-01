@@ -54,6 +54,10 @@ TEST_CASE("monitoring contracts compile against portable fakes")
 
 TEST_CASE("monitoring identifiers and generation reject invalid durable values")
 {
+    static_assert(noexcept(RootId::isValid("root")));
+    REQUIRE(RootId::isValid("root"));
+    REQUIRE_FALSE(RootId::isValid(""));
+    REQUIRE_FALSE(RootId::isValid("\xC0\x80"));
     REQUIRE_FALSE(RootId::create(""));
     REQUIRE_FALSE(RootId::create("\xC0\x80"));
     REQUIRE_FALSE(Generation::create(0));

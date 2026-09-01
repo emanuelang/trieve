@@ -34,7 +34,7 @@ public:
 };
 }
 
-TEST_CASE("path_policy: owns normalized component boundaries and rejects escaping candidates")
+TEST_CASE("monitoring path_policy: owns normalized component boundaries and rejects escaping candidates")
 {
     LexicalSemantics paths;
     PathPolicy policy(paths);
@@ -45,10 +45,13 @@ TEST_CASE("path_policy: owns normalized component boundaries and rejects escapin
     REQUIRE(policy.owns(root, root));
     REQUIRE(policy.rootsOverlap(root, {"/scan/root/sub"}));
     REQUIRE_FALSE(policy.rootsOverlap(root, {"/scan/root2"}));
+    REQUIRE(policy.acceptsRootSet({root, {"/scan/root2"}}));
+    REQUIRE_FALSE(policy.acceptsRootSet({root, {"/scan/root/sub"}}));
+    REQUIRE_FALSE(policy.acceptsRootSet({root, root}));
     REQUIRE(paths.compareComponent("\xC3\x84", "\xC3\xA4") != 0);
 }
 
-TEST_CASE("path_policy: defaults are neutral and filters by normalized components")
+TEST_CASE("monitoring path_policy: defaults are neutral and filters by normalized components")
 {
     LexicalSemantics paths;
     PathPolicy policy(paths);

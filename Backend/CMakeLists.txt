@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+﻿cmake_minimum_required(VERSION 3.20)
 
 project(semantic_fs_backend)
 
@@ -83,6 +83,7 @@ if(BUILD_TESTING)
         tests/extractors/image_extractor_smoke_test.cpp
         tests/monitoring/contracts_compile_test.cpp
         tests/monitoring/path_policy_test.cpp
+        tests/monitoring/initial_scanner_test.cpp
     )
     if(WIN32)
         target_sources(semantic_fs_core_tests PRIVATE tests/monitoring/native_file_system_view_test.cpp)

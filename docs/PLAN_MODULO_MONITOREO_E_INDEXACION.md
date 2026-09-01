@@ -255,13 +255,16 @@ Una restricción única protege `event_id`; otra protege la combinación lógica
 
 ### Fase 1 — Contratos y scanner one-shot
 
-- [ ] Definir tipos persistibles, `IFileWatcher`, `IFileObservationSink`, `IFileChangeSink`, `IClock` y resultados cerrados.
-- [ ] Implementar normalización, pertenencia a raíces y `PolicyFilter`.
-- [ ] Implementar `InitialScanner` cancelable con `FakeFileObservationSink`; `IFileChangeSink` permanece post-outbox.
-- [ ] Probar Unicode, rutas largas, ACL, desaparición TOCTOU y enlaces/reparse points.
+- [x] Definir tipos persistibles, `IFileWatcher`, `IFileObservationSink`, `IFileChangeSink`, `IClock` y resultados cerrados.
+- [x] Implementar normalización, pertenencia a raíces y `PolicyFilter`.
+- [x] Implementar `InitialScanner` cancelable con `FakeFileObservationSink`; `IFileChangeSink` permanece post-outbox.
+- [x] Probar scanner determinista con ACL, desaparición TOCTOU, enlaces/reparse points, cancelación y backpressure; Unicode y rutas largas continúan como cobertura de adaptador nativo.
+
+**Evidencia final revalidada (2026-09-01):** el build Debug finalizó correctamente; `ctest -R monitoring` pasó 8/8 pruebas y `make -C Backend test` pasó 10/10. La validación de identificadores dispone de una ruta pura y sin asignaciones; la configuración rechaza raíces solapadas; la semántica nativa cubre rutas Windows legacy-long. La fixture prueba orden determinista, errores acotados por ruta relativa, retención de observaciones previas al cancelar y continuidad de errores hasta una posterior parada del sink. El scanner sólo produce `FileObservation` pre-durables: no asigna identidad durable, generación ni eventos, y no invoca `IFileChangeSink`.
+
+**Límites:** esta fase no implementa watcher, cutover, SQLite/catálogo/outbox, reconciliación, reintentos, orquestación, OCR ni indexación, ni promete un snapshot atómico. Los adaptadores nativos siguen limitados a Windows; no existe sustituto POSIX.
 
 **Salida verificable:** una raíz de fixture entrega sólo `FileObservation` admitidos al fake pre-durable, sin IDs durables, generación ni dependencias semánticas.
-
 ### Fase 2 — Watcher Windows y arranque seguro
 
 - [ ] Implementar `WindowsFileWatcher` asíncrono con cola acotada y cancelación.
