@@ -26,6 +26,8 @@ struct VisualColorSignals {
     double brightWarmRatio = 0.0;
     double blueRatio = 0.0;
     double darkRatio = 0.0;
+    double whiteRatio = 0.0;
+    double blackRatio = 0.0;
     double lightNeutralRatio = 0.0;
     double greenRatio = 0.0;
     double topWarmRatio = 0.0;
@@ -101,6 +103,8 @@ VisualColorSignals readColorSignals(const std::filesystem::path& imagePath)
     int brightWarm = 0;
     int blue = 0;
     int dark = 0;
+    int white = 0;
+    int black = 0;
     int lightNeutral = 0;
     int greenCount = 0;
     int topSamples = 0;
@@ -131,6 +135,12 @@ VisualColorSignals readColorSignals(const std::filesystem::path& imagePath)
             }
             if (red + greenValue + blueValue < 120) {
                 ++dark;
+            }
+            if (red > 220 && greenValue > 220 && blueValue > 220) {
+                ++white;
+            }
+            if (red < 45 && greenValue < 45 && blueValue < 65) {
+                ++black;
             }
             if (red > 150 && greenValue > 150 && blueValue > 150 && std::abs(red - greenValue) < 45 && std::abs(greenValue - blueValue) < 45) {
                 ++lightNeutral;
@@ -168,6 +178,8 @@ VisualColorSignals readColorSignals(const std::filesystem::path& imagePath)
         .brightWarmRatio = static_cast<double>(brightWarm) / static_cast<double>(samples),
         .blueRatio = static_cast<double>(blue) / static_cast<double>(samples),
         .darkRatio = static_cast<double>(dark) / static_cast<double>(samples),
+        .whiteRatio = static_cast<double>(white) / static_cast<double>(samples),
+        .blackRatio = static_cast<double>(black) / static_cast<double>(samples),
         .lightNeutralRatio = static_cast<double>(lightNeutral) / static_cast<double>(samples),
         .greenRatio = static_cast<double>(greenCount) / static_cast<double>(samples),
         .topWarmRatio = topSamples == 0 ? 0.0 : static_cast<double>(topWarm) / static_cast<double>(topSamples),
@@ -175,6 +187,14 @@ VisualColorSignals readColorSignals(const std::filesystem::path& imagePath)
         .lowerDarkRatio = lowerSamples == 0 ? 0.0 : static_cast<double>(lowerDark) / static_cast<double>(lowerSamples),
         .aspectRatio = static_cast<double>(width) / static_cast<double>(height)
     };
+}
+
+bool looksLikeTextGraphic(const VisualColorSignals& signals)
+{
+    return signals.loaded
+        && signals.darkRatio > 0.30
+        && signals.whiteRatio > 0.06
+        && signals.blueRatio > 0.25;
 }
 
 bool looksLikeSunset(const std::string& combined, const VisualColorSignals& signals)
@@ -224,7 +244,9 @@ VisualDescriptionResult HeuristicVisualDescriptor::describe(
     const auto concepts = inferConcepts(imagePath, ocrText, visualType);
 
     std::ostringstream summary;
-    if (visualType == "mountain_landscape") {
+    if (visualType == "possible_text_graphic") {
+        summary << "Imagen grafica con posible texto visible";
+    } else if (visualType == "mountain_landscape") {
         summary << "Paisaje de montana con cielo calido y nubes";
     } else if (visualType == "sunset_landscape") {
         summary << "Paisaje de atardecer con colores calidos";
@@ -267,16 +289,8 @@ std::string HeuristicVisualDescriptor::inferVisualType(
     const auto combined = fileText + " " + text;
     const auto colorSignals = readColorSignals(imagePath);
 
-    if (looksLikeSunset(combined, colorSignals)) {
-        return "sunset_landscape";
-    }
-
-    if (looksLikeMountainLandscape(combined, colorSignals)) {
-        return "mountain_landscape";
-    }
-
-    if (looksLikeNaturalLandscape(combined, colorSignals)) {
-        return "natural_landscape";
+    if (text.empty() && looksLikeTextGraphic(colorSignals)) {
+        return "possible_text_graphic";
     }
 
     if (containsAny(
@@ -294,6 +308,18 @@ std::string HeuristicVisualDescriptor::inferVisualType(
             }
         )) {
         return "economic_news_graphic";
+    }
+
+    if (looksLikeSunset(combined, colorSignals)) {
+        return "sunset_landscape";
+    }
+
+    if (!looksLikeTextGraphic(colorSignals) && looksLikeMountainLandscape(combined, colorSignals)) {
+        return "mountain_landscape";
+    }
+
+    if (!looksLikeTextGraphic(colorSignals) && looksLikeNaturalLandscape(combined, colorSignals)) {
+        return "natural_landscape";
     }
 
     if (!text.empty() && text.size() > 120) {
@@ -330,6 +356,11 @@ std::vector<std::string> HeuristicVisualDescriptor::inferConcepts(
     if (!ocrText.empty()) {
         addUnique(concepts, "contains text");
     }
+    if (looksLikeTextGraphic(colorSignals)) {
+        addUnique(concepts, "posible texto visible");
+        addUnique(concepts, "placa informativa");
+        addUnique(concepts, "grafica con texto");
+    }
 
     if (looksLikeSunset(combined, colorSignals)) {
         addUnique(concepts, "atardecer");
@@ -340,7 +371,7 @@ std::vector<std::string> HeuristicVisualDescriptor::inferConcepts(
         addUnique(concepts, "naturaleza");
     }
 
-    if (looksLikeMountainLandscape(combined, colorSignals)) {
+    if (!looksLikeTextGraphic(colorSignals) && looksLikeMountainLandscape(combined, colorSignals)) {
         addUnique(concepts, "paisaje");
         addUnique(concepts, "montana");
         addUnique(concepts, "montaña");
@@ -352,7 +383,7 @@ std::vector<std::string> HeuristicVisualDescriptor::inferConcepts(
         addUnique(concepts, "naturaleza");
     }
 
-    if (looksLikeNaturalLandscape(combined, colorSignals)) {
+    if (!looksLikeTextGraphic(colorSignals) && looksLikeNaturalLandscape(combined, colorSignals)) {
         addUnique(concepts, "paisaje");
         addUnique(concepts, "naturaleza");
         addUnique(concepts, "outdoor");
