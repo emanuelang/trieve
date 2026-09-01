@@ -19,6 +19,8 @@ enum class ContentType {
     Unknown,
     Text,
     Image,
+    VisualDescription,
+    VisualConcepts,
     Audio,
     VideoFrame
 };
@@ -44,6 +46,7 @@ struct ExtractedSegment {
     ContentType contentType = ContentType::Unknown;
     std::string detectedLanguage = "unknown";
     double languageConfidence = 0.0;
+    double extractionConfidence = 0.0;
 
     // Se copia desde ContentInput para no perder el origen del segmento.
     int page = -1;

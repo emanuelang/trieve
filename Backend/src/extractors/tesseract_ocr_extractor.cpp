@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace semantic_fs::extractors {
@@ -34,6 +35,52 @@ struct TextDestroyer {
         delete[] text;
     }
 };
+
+std::string sanitizeUtf8(const std::string& text)
+{
+    std::string clean;
+    clean.reserve(text.size());
+
+    for (std::size_t index = 0; index < text.size();) {
+        const auto byte = static_cast<unsigned char>(text[index]);
+        std::size_t sequenceLength = 0;
+
+        if (byte <= 0x7F) {
+            sequenceLength = 1;
+        } else if ((byte & 0xE0) == 0xC0) {
+            sequenceLength = 2;
+        } else if ((byte & 0xF0) == 0xE0) {
+            sequenceLength = 3;
+        } else if ((byte & 0xF8) == 0xF0) {
+            sequenceLength = 4;
+        } else {
+            ++index;
+            continue;
+        }
+
+        if (index + sequenceLength > text.size()) {
+            break;
+        }
+
+        bool valid = true;
+        for (std::size_t offset = 1; offset < sequenceLength; ++offset) {
+            const auto continuation = static_cast<unsigned char>(text[index + offset]);
+            if ((continuation & 0xC0) != 0x80) {
+                valid = false;
+                break;
+            }
+        }
+
+        if (valid) {
+            clean.append(text, index, sequenceLength);
+            index += sequenceLength;
+        } else {
+            ++index;
+        }
+    }
+
+    return clean;
+}
 
 } // namespace
 
@@ -95,6 +142,14 @@ std::string TesseractOcrExtractor::name() const
 
 std::string TesseractOcrExtractor::extractText(const std::string& imagePath) const
 {
+    return extractText(imagePath, -1);
+}
+
+std::string TesseractOcrExtractor::extractText(
+    const std::string& imagePath,
+    int pageSegmentationMode
+) const
+{
     // pixRead pertenece a Leptonica. Lee PNG/JPG/TIFF/etc. y devuelve una imagen
     // en memoria que Tesseract puede procesar.
     std::unique_ptr<Pix, PixDestroyer> image(pixRead(imagePath.c_str()));
@@ -118,6 +173,14 @@ std::string TesseractOcrExtractor::extractText(const std::string& imagePath) con
         );
     }
 
+    if (pageSegmentationMode >= 0) {
+        api.SetPageSegMode(static_cast<tesseract::PageSegMode>(pageSegmentationMode));
+    }
+
+    // Evita que Tesseract ensucie la consola con warnings internos de layout
+    // cuando analiza recortes chicos o con mucho ruido visual.
+    api.SetVariable("debug_file", "NUL");
+
     // Entregamos la imagen cargada por Leptonica al motor OCR.
     api.SetImage(image.get());
 
@@ -127,14 +190,23 @@ std::string TesseractOcrExtractor::extractText(const std::string& imagePath) con
         return "";
     }
 
-    // Copiamos el char* de Tesseract a std::string antes de liberar memoria.
-    return std::string(text.get());
+    // Copiamos el char* de Tesseract y limpiamos bytes invalidos para que CLD3,
+    // fmt/spdlog y la consola no fallen con "invalid utf8".
+    return sanitizeUtf8(text.get());
 }
 
 std::string TesseractOcrExtractor::extractText(const std::filesystem::path& imagePath) const
 {
     // Sobrecarga de comodidad para poder pasar std::filesystem::path directamente.
     return extractText(imagePath.string());
+}
+
+std::string TesseractOcrExtractor::extractText(
+    const std::filesystem::path& imagePath,
+    int pageSegmentationMode
+) const
+{
+    return extractText(imagePath.string(), pageSegmentationMode);
 }
 
 } // namespace semantic_fs::extractors

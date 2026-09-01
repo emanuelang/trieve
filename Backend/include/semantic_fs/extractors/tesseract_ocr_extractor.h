@@ -28,7 +28,9 @@ public:
 
     // API directa para pruebas o uso interno: recibe una ruta y devuelve solo texto.
     std::string extractText(const std::string& imagePath) const;
+    std::string extractText(const std::string& imagePath, int pageSegmentationMode) const;
     std::string extractText(const std::filesystem::path& imagePath) const;
+    std::string extractText(const std::filesystem::path& imagePath, int pageSegmentationMode) const;
 
 private:
     // Configuracion que se pasa a TessBaseAPI::Init en cada extraccion.
