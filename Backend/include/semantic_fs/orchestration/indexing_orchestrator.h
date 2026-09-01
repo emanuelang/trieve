@@ -3,6 +3,7 @@
 #include "semantic_fs/core/file_document.h"
 #include "semantic_fs/extractors/extraction_types.h"
 #include "semantic_fs/extractors/extractor_factory.h"
+#include "semantic_fs/rag/rag_module.h"
 
 #include <filesystem>
 
@@ -18,6 +19,10 @@ public:
 
     IndexingOrchestrator() = default;
     explicit IndexingOrchestrator(semantic_fs::extractors::ExtractorFactory extractorFactory);
+    IndexingOrchestrator(
+        semantic_fs::extractors::ExtractorFactory extractorFactory,
+        semantic_fs::rag::RagModule ragModule
+    );
 
     // Crea el objeto documento a partir de una ruta recibida desde afuera.
     // Hoy lo usa main como prueba; en el futuro puede llamarlo el modulo que
@@ -41,6 +46,7 @@ public:
 
 private:
     semantic_fs::extractors::ExtractorFactory extractorFactory_;
+    semantic_fs::rag::RagModule ragModule_;
 };
 
 } // namespace semantic_fs::orchestration

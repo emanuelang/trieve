@@ -1,6 +1,7 @@
 #pragma once
 
 #include "semantic_fs/extractors/extraction_types.h"
+#include "semantic_fs/rag/rag_types.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -38,6 +39,8 @@ public:
     const std::vector<ExtractedSegment>& contexts() const;
     bool hasContexts() const;
     std::size_t contextCount() const;
+    const semantic_fs::rag::RagIndexingResult& ragIndexingResult() const;
+    bool hasRagIndexingResult() const;
 
     // Setters para permitir que scanner, extractores o storage completen datos
     // a medida que avanza el pipeline.
@@ -51,6 +54,7 @@ public:
     void addContext(ExtractedSegment segment);
     void setContexts(std::vector<ExtractedSegment> contexts);
     void clearContexts();
+    void setRagIndexingResult(semantic_fs::rag::RagIndexingResult result);
 
     // Lee metadata basica desde disco si el archivo existe.
     // No calcula hash todavia: eso puede quedar para un servicio especializado.
@@ -63,6 +67,8 @@ private:
     std::uintmax_t sizeBytes_ = 0;
     std::filesystem::file_time_type modifiedAt_ {};
     std::vector<ExtractedSegment> contexts_;
+    semantic_fs::rag::RagIndexingResult ragIndexingResult_ {};
+    bool hasRagIndexingResult_ = false;
 };
 
 } // namespace semantic_fs::core

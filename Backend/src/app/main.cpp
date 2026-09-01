@@ -113,6 +113,14 @@ int main(int argc, char* argv[])
         fmt::print("Extension: {}\n", pathToUtf8String(document.path().extension()));
         fmt::print("Size bytes: {}\n", document.sizeBytes());
         fmt::print("Extracted contexts: {}\n", document.contextCount());
+        if (document.hasRagIndexingResult()) {
+            const auto& rag = document.ragIndexingResult();
+            fmt::print("RAG raw segments: {}\n", rag.rawSegmentCount);
+            fmt::print("RAG sanitized segments: {}\n", rag.sanitizedSegmentCount);
+            fmt::print("RAG discarded segments: {}\n", rag.discardedSegmentCount);
+            fmt::print("RAG chunks: {}\n", rag.chunkCount);
+            fmt::print("RAG embeddings: {}\n", rag.embeddingCount);
+        }
 
         for (const auto& context : document.contexts()) {
             fmt::print("Context source: {}\n", sanitizeUtf8(context.source));

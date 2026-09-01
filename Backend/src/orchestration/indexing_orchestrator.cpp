@@ -11,6 +11,15 @@ IndexingOrchestrator::IndexingOrchestrator(
 {
 }
 
+IndexingOrchestrator::IndexingOrchestrator(
+    semantic_fs::extractors::ExtractorFactory extractorFactory,
+    semantic_fs::rag::RagModule ragModule
+)
+    : extractorFactory_(std::move(extractorFactory)),
+      ragModule_(std::move(ragModule))
+{
+}
+
 IndexingOrchestrator::FileDocument IndexingOrchestrator::createDocument(
     const std::filesystem::path& filePath
 ) const
@@ -41,6 +50,8 @@ IndexingOrchestrator::FileDocument IndexingOrchestrator::indexFile(FileDocument 
     for (const auto& segment : extraction.segments) {
         file.addContext(segment);
     }
+
+    file.setRagIndexingResult(ragModule_.indexDocument(file));
 
     return file;
 }

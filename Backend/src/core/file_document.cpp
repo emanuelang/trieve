@@ -75,6 +75,16 @@ std::size_t FileDocument::contextCount() const
     return contexts_.size();
 }
 
+const semantic_fs::rag::RagIndexingResult& FileDocument::ragIndexingResult() const
+{
+    return ragIndexingResult_;
+}
+
+bool FileDocument::hasRagIndexingResult() const
+{
+    return hasRagIndexingResult_;
+}
+
 void FileDocument::setPath(std::filesystem::path path)
 {
     path_ = std::move(path);
@@ -113,6 +123,12 @@ void FileDocument::setContexts(std::vector<ExtractedSegment> contexts)
 void FileDocument::clearContexts()
 {
     contexts_.clear();
+}
+
+void FileDocument::setRagIndexingResult(semantic_fs::rag::RagIndexingResult result)
+{
+    ragIndexingResult_ = result;
+    hasRagIndexingResult_ = true;
 }
 
 void FileDocument::refreshMetadataFromDisk()
