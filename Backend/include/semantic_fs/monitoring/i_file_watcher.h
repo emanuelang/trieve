@@ -1,4 +1,22 @@
 #pragma once
-#include "semantic_fs/monitoring/monitoring_types.h"
-#include <functional>
-namespace semantic_fs::monitoring { using WatcherCallback = std::function<void(const WatcherEvent&)>; class IFileWatcher { public: virtual ~IFileWatcher() = default; virtual WatcherStartResult start(const WatchRootConfig& config, WatcherCallback callback) = 0; virtual void stop() = 0; }; }
+#include "semantic_fs/monitoring/i_watcher_ingress_sink.h"
+
+#include <memory>
+
+namespace semantic_fs::monitoring {
+class IWatcherSession {
+public:
+    virtual ~IWatcherSession() = default;
+    virtual BarrierRequestOutcome requestBarrier() noexcept = 0;
+    virtual CancelOutcome requestCancellation() noexcept = 0;
+    virtual StopOutcome stopAndJoin() noexcept = 0;
+};
+
+struct WatcherStartOutcome { WatcherStartStatus status; std::shared_ptr<IWatcherSession> session; };
+
+class IFileWatcher {
+public:
+    virtual ~IFileWatcher() = default;
+    virtual WatcherStartOutcome start(const WatchRootConfig& config, IWatcherIngressSink& ingress) = 0;
+};
+} // namespace semantic_fs::monitoring

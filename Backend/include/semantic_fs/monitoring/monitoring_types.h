@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace semantic_fs::monitoring {
@@ -114,6 +115,26 @@ struct PolicyFilterConfig {
 struct WatchRootConfig { RootId rootId; AbsolutePath root; PolicyFilterConfig policy; };
 enum class WatcherEventKind { Created, Modified, Removed, Renamed, Overflow };
 struct WatcherEvent { RootId rootId; WatcherEventKind kind; AbsolutePath path; std::optional<AbsolutePath> previousPath; };
-enum class WatcherStartResult { Started, InvalidConfig, RootUnavailable, NativeFailure };
+
+using WatcherSequence = std::uint64_t;
+using BarrierId = std::uint64_t;
+using GapEpoch = std::uint64_t;
+enum class DirtyReason : std::uint32_t { OsOverflow = 1, DecodeGap = 2, QueueSaturation = 4, OrderingGap = 8, Cancellation = 16, SinkRefusal = 32, NativeFailure = 64, ScanFailure = 128, BarrierFailure = 256 };
+struct WatcherRecord { WatcherSequence sequence; WatcherEvent event; };
+struct RootDirty { RootId rootId; GapEpoch epoch; std::uint32_t reasons; };
+struct BarrierReached { BarrierId id; WatcherSequence highWater; GapEpoch epoch; };
+struct PendingReconciliation { RootId rootId; GapEpoch epoch; std::uint32_t reasons; };
+enum class RootHealth { Starting, Dirty, Healthy, Degraded, Cancelled, Stopped };
+using WatcherIngress = std::variant<WatcherRecord, RootDirty, BarrierReached>;
+using StartupCoverage = std::variant<FileObservation, WatcherIngress, PendingReconciliation>;
+enum class IngressDelivery { Accepted, Stopped };
+enum class CoverageDelivery { Accepted, Refused };
+enum class BarrierRequestStatus { Accepted, Busy, Stopped };
+struct BarrierRequestOutcome { BarrierRequestStatus status; std::optional<BarrierId> id; };
+enum class CancelOutcome { Requested, AlreadyRequested, AlreadyStopped };
+enum class StopOutcome { Stopped, AlreadyStopped };
+enum class WatcherStartStatus { Started, AlreadyStarted, Busy, InvalidConfig, RootUnavailable, NativeFailure };
+enum class StartupStatus { Healthy, Degraded, Cancelled };
+struct StartupOutcome { StartupStatus status; RootHealth health; std::optional<PendingReconciliation> pending; };
 
 } // namespace semantic_fs::monitoring

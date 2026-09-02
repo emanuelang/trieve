@@ -33,6 +33,7 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/processing/text_cleaner.cpp
     src/scanner/scanner.cpp
     src/scanner/path_policy.cpp
+    src/monitoring/safe_startup_coordinator.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
@@ -82,6 +83,8 @@ if(BUILD_TESTING)
     add_executable(semantic_fs_core_tests
         tests/extractors/image_extractor_smoke_test.cpp
         tests/monitoring/contracts_compile_test.cpp
+        tests/monitoring/watcher_contracts_test.cpp
+        tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp
         tests/monitoring/initial_scanner_test.cpp
     )

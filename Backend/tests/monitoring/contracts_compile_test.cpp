@@ -23,10 +23,19 @@ class FakeChangeSink final : public IFileChangeSink {
 public:
     PublishResult publish(const FileChange&) override { return PublishResult::Accepted; }
 };
+class FakeIngress final : public IWatcherIngressSink {
+public:
+    IngressDelivery accept(WatcherIngress) override { return IngressDelivery::Accepted; }
+};
+class FakeSession final : public IWatcherSession {
+public:
+    BarrierRequestOutcome requestBarrier() noexcept override { return {BarrierRequestStatus::Accepted, BarrierId{1}}; }
+    CancelOutcome requestCancellation() noexcept override { return CancelOutcome::Requested; }
+    StopOutcome stopAndJoin() noexcept override { return StopOutcome::Stopped; }
+};
 class FakeWatcher final : public IFileWatcher {
 public:
-    WatcherStartResult start(const WatchRootConfig&, WatcherCallback) override { return WatcherStartResult::Started; }
-    void stop() override {}
+    WatcherStartOutcome start(const WatchRootConfig&, IWatcherIngressSink&) override { return {WatcherStartStatus::Started, std::make_shared<FakeSession>()}; }
 };
 static_assert(std::is_same_v<decltype(&IFileObservationSink::observe), ObservationDelivery (IFileObservationSink::*)(const FileObservation&)>);
 static_assert(!std::is_same_v<decltype(&IFileObservationSink::observe), ObservationDelivery (IFileObservationSink::*)(const FileChange&)>);
@@ -43,13 +52,14 @@ TEST_CASE("monitoring contracts compile against portable fakes")
     FakeClock clock;
     FakeObservationSink observations;
     FakeChangeSink changes;
+    FakeIngress ingress;
     FakeWatcher watcher;
     const FileObservation observation{*RootId::create("root"), {}, {}, clock.utcNow(), ObservationKind::Discovered, ObservationSource::InitialScan};
 
     REQUIRE(observations.observe(observation) == ObservationDelivery::Accepted);
     REQUIRE(changes.publish(makeChange()) == PublishResult::Accepted);
     const WatchRootConfig config{*RootId::create("root"), {"C:/root"}, {}};
-    REQUIRE(watcher.start(config, {}) == WatcherStartResult::Started);
+    REQUIRE(watcher.start(config, ingress).status == WatcherStartStatus::Started);
 }
 
 TEST_CASE("monitoring identifiers and generation reject invalid durable values")
