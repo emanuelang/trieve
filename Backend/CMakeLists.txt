@@ -47,6 +47,8 @@ if(WIN32)
     list(APPEND SEMANTIC_FS_CORE_SOURCES
         src/scanner/windows_path_semantics.cpp
         src/scanner/windows_file_system_view.cpp
+        src/monitoring/windows_file_watcher.cpp
+        src/monitoring/file_watcher_factory.cpp
     )
 endif()
 
@@ -89,7 +91,10 @@ if(BUILD_TESTING)
         tests/monitoring/initial_scanner_test.cpp
     )
     if(WIN32)
-        target_sources(semantic_fs_core_tests PRIVATE tests/monitoring/native_file_system_view_test.cpp)
+        target_sources(semantic_fs_core_tests PRIVATE
+            tests/monitoring/native_file_system_view_test.cpp
+            tests/monitoring/windows_file_watcher_test.cpp
+        )
     endif()
 
     target_link_libraries(semantic_fs_core_tests
