@@ -9,6 +9,7 @@ StartupOutcome SafeStartupCoordinator::leaveNonHealthy(StartupStatus status, Dir
     std::lock_guard lock(stateMutex_);
     ++dirtyEpoch_;
     dirtyReasons_ |= static_cast<std::uint32_t>(reason);
+    pendingReconciliation_ = true;
     health_ = status == StartupStatus::Cancelled ? RootHealth::Cancelled : RootHealth::Degraded;
     const PendingReconciliation pending{root_->rootId, dirtyEpoch_, dirtyReasons_};
     coverage_.accept(pending);
@@ -34,6 +35,7 @@ IngressDelivery SafeStartupCoordinator::accept(WatcherIngress ingress)
         ++dirtyEpoch_;
         dirtyReasons_ |= static_cast<std::uint32_t>(DirtyReason::SinkRefusal);
         health_ = RootHealth::Dirty;
+        coverageRefused_ = true;
         return IngressDelivery::Stopped;
     }
     return IngressDelivery::Accepted;
@@ -44,7 +46,14 @@ ObservationDelivery SafeStartupCoordinator::observe(const FileObservation& obser
     std::lock_guard lock(stateMutex_);
     auto accepted = observation;
     if (reconciling_) accepted.source = ObservationSource::Reconciliation;
-    if (health_ == RootHealth::Stopped || !deliver(accepted)) return ObservationDelivery::Rejected;
+    if (health_ == RootHealth::Stopped) return ObservationDelivery::Rejected;
+    if (!deliver(accepted)) {
+        ++dirtyEpoch_;
+        dirtyReasons_ |= static_cast<std::uint32_t>(DirtyReason::SinkRefusal);
+        health_ = RootHealth::Dirty;
+        coverageRefused_ = true;
+        return ObservationDelivery::Rejected;
+    }
     return ObservationDelivery::Accepted;
 }
 
@@ -52,7 +61,9 @@ StartupOutcome SafeStartupCoordinator::start(const WatchRootConfig& root, const 
 {
     {
         std::lock_guard lock(stateMutex_);
-        root_ = root; health_ = RootHealth::Starting; barrier_.reset(); dirtyEpoch_ = 0; dirtyReasons_ = 0;
+        const bool restartReconciliation = pendingReconciliation_;
+        root_ = root; health_ = RootHealth::Starting; barrier_.reset(); coverageRefused_ = false;
+        if (!restartReconciliation) { dirtyEpoch_ = 0; dirtyReasons_ = 0; }
     }
     const auto started = watcher_.start(root, *this);
     if (!started.session || (started.status != WatcherStartStatus::Started && started.status != WatcherStartStatus::AlreadyStarted)) return leaveNonHealthy(StartupStatus::Degraded, DirtyReason::NativeFailure);
@@ -72,7 +83,7 @@ StartupOutcome SafeStartupCoordinator::start(const WatchRootConfig& root, const 
     const auto initial = scan();
     if (initial.status != ScanStatus::Completed) {
         session_->requestCancellation(); session_->stopAndJoin();
-        return leaveNonHealthy(initial.status == ScanStatus::Cancelled ? StartupStatus::Cancelled : StartupStatus::Degraded, initial.status == ScanStatus::Cancelled ? DirtyReason::Cancellation : DirtyReason::ScanFailure);
+        return leaveNonHealthy(initial.status == ScanStatus::Cancelled ? StartupStatus::Cancelled : StartupStatus::Degraded, initial.status == ScanStatus::Cancelled ? DirtyReason::Cancellation : coverageRefused_ ? DirtyReason::SinkRefusal : DirtyReason::ScanFailure);
     }
     std::optional<GapEpoch> reconciliationEpoch;
     {
@@ -97,7 +108,7 @@ StartupOutcome SafeStartupCoordinator::start(const WatchRootConfig& root, const 
         std::lock_guard lock(stateMutex_);
         const bool barrierFailed = request.status != BarrierRequestStatus::Accepted || !request.id || !barrier_ || barrier_->id != *request.id || (reconciliationEpoch && (barrier_->epoch < *reconciliationEpoch || dirtyEpoch_ != *reconciliationEpoch)) || (!reconciliationEpoch && dirtyReasons_ != 0);
         if (!barrierFailed) {
-            if (reconciliationEpoch) dirtyReasons_ = 0;
+            if (reconciliationEpoch) { dirtyReasons_ = 0; pendingReconciliation_ = false; }
             health_ = RootHealth::Healthy;
             return {StartupStatus::Healthy, health_, std::nullopt};
         }

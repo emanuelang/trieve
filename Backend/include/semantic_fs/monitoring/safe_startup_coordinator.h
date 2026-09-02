@@ -32,6 +32,8 @@ private:
     std::uint32_t dirtyReasons_{};
     std::optional<BarrierReached> barrier_;
     bool reconciling_{};
+    bool coverageRefused_{};
+    bool pendingReconciliation_{};
     InitialScanner scanner_;
 };
 } // namespace semantic_fs::monitoring
