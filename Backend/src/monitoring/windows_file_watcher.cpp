@@ -1,13 +1,16 @@
 #include "semantic_fs/monitoring/i_file_watcher.h"
+#include "windows_file_watcher_parser.h"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <span>
 #include <thread>
 
 namespace semantic_fs::monitoring {
@@ -30,17 +33,39 @@ std::optional<std::string> utf8(const wchar_t* value, int length)
     return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, length, result.data(), size, nullptr, nullptr) ? std::optional<std::string>{std::move(result)} : std::nullopt;
 }
 
-bool safeName(std::wstring_view name)
+bool isSafeRelativeName(std::wstring_view name)
 {
     if (name.empty() || name.starts_with(L'\\') || name.starts_with(L'/') || name.find(L'\0') != std::wstring_view::npos) return false;
     std::size_t start{};
     while (start < name.size()) {
         const auto end = name.find_first_of(L"\\/", start);
-        if (name.substr(start, end - start) == L"..") return false;
+        const auto component = name.substr(start, end - start);
+        if (component.empty() || component == L"." || component == L".." || component.find(L':') != std::wstring_view::npos) return false;
         if (end == std::wstring_view::npos) break;
         start = end + 1;
     }
     return true;
+}
+
+std::optional<AbsolutePath> pathUnderRoot(const WatchRootConfig& root, std::wstring_view name)
+{
+    if (!isSafeRelativeName(name)) return std::nullopt;
+    const auto utf8Name = utf8(name.data(), static_cast<int>(name.size()));
+    if (!utf8Name) return std::nullopt;
+    std::string normalizedName = *utf8Name;
+    std::replace(normalizedName.begin(), normalizedName.end(), '\\', '/');
+    std::string value = root.root.utf8;
+    while (!value.empty() && (value.back() == '/' || value.back() == '\\')) value.pop_back();
+    if (value.empty()) return std::nullopt;
+    return AbsolutePath{std::move(value) + "/" + normalizedName};
+}
+
+WatcherEvent eventFor(const WatchRootConfig& root, DWORD action, AbsolutePath path)
+{
+    auto kind = WatcherEventKind::Modified;
+    if (action == FILE_ACTION_ADDED) kind = WatcherEventKind::Created;
+    else if (action == FILE_ACTION_REMOVED || action == FILE_ACTION_RENAMED_OLD_NAME) kind = WatcherEventKind::Removed;
+    return {root.rootId, kind, std::move(path), {}};
 }
 
 struct State final : IWatcherSession, std::enable_shared_from_this<State> {
@@ -132,27 +157,10 @@ struct State final : IWatcherSession, std::enable_shared_from_this<State> {
     }
     void parse(const std::byte* bytes, DWORD byteCount)
     {
-        DWORD offset{};
-        std::optional<WatcherEvent> old;
-        while (offset < byteCount) {
-            if (byteCount - offset < offsetof(FILE_NOTIFY_INFORMATION, FileName)) { markDirty(DirtyReason::DecodeGap); return; }
-            const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(bytes + offset);
-            const auto recordSize = offsetof(FILE_NOTIFY_INFORMATION, FileName) + info->FileNameLength;
-            if (info->FileNameLength % sizeof(wchar_t) || recordSize > byteCount - offset || !safeName({info->FileName, info->FileNameLength / sizeof(wchar_t)})) { markDirty(DirtyReason::DecodeGap); return; }
-            auto name = utf8(info->FileName, static_cast<int>(info->FileNameLength / sizeof(wchar_t)));
-            if (!name) { markDirty(DirtyReason::DecodeGap); return; }
-            const AbsolutePath path{root.root.utf8 + "/" + *name};
-            auto event = WatcherEvent{root.rootId, WatcherEventKind::Modified, path, {}};
-            if (info->Action == FILE_ACTION_ADDED) event.kind = WatcherEventKind::Created;
-            else if (info->Action == FILE_ACTION_REMOVED) event.kind = WatcherEventKind::Removed;
-            else if (info->Action == FILE_ACTION_RENAMED_OLD_NAME) { if (old) enqueue(*old); old = WatcherEvent{root.rootId, WatcherEventKind::Removed, path, {}}; }
-            else if (info->Action == FILE_ACTION_RENAMED_NEW_NAME && old) { event.kind = WatcherEventKind::Renamed; event.previousPath = old->path; enqueue(std::move(event)); old.reset(); }
-            else { if (old) { enqueue(*old); old.reset(); } enqueue(std::move(event)); }
-            if (!info->NextEntryOffset) { if (old) enqueue(*old); return; }
-            if (info->NextEntryOffset < recordSize || info->NextEntryOffset > byteCount - offset) { markDirty(DirtyReason::DecodeGap); return; }
-            offset += info->NextEntryOffset;
-        }
-        markDirty(DirtyReason::DecodeGap);
+        const auto termination = stopping.load() ? detail::WindowsWatcherDecodeTermination::Cancelled : detail::WindowsWatcherDecodeTermination::BatchComplete;
+        auto decoded = detail::decodeWindowsWatcherRecords(root, std::span(bytes, static_cast<std::size_t>(byteCount)), termination);
+        for (auto& event : decoded.events) enqueue(std::move(event));
+        if (decoded.dirty) markDirty(DirtyReason::DecodeGap);
     }
 
     WatchRootConfig root;
@@ -207,6 +215,101 @@ private:
     std::weak_ptr<State> state;
 };
 } // namespace
+
+namespace detail {
+DecodedWindowsWatcherRecords decodeWindowsWatcherRecords(
+    const WatchRootConfig& root,
+    std::span<const std::byte> bytes,
+    WindowsWatcherDecodeTermination termination)
+{
+    DecodedWindowsWatcherRecords result;
+    result.dirty = termination == WindowsWatcherDecodeTermination::Cancelled;
+    std::optional<WatcherEvent> pendingOld;
+    const auto degradePendingOld = [&] {
+        if (!pendingOld) return;
+        result.events.push_back(std::move(*pendingOld));
+        pendingOld.reset();
+        result.dirty = true;
+    };
+
+    std::size_t offset{};
+    while (offset < bytes.size()) {
+        constexpr auto fixedSize = offsetof(FILE_NOTIFY_INFORMATION, FileName);
+        if (bytes.size() - offset < fixedSize) {
+            degradePendingOld();
+            result.dirty = true;
+            return result;
+        }
+        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(bytes.data() + offset);
+        const auto nameBytes = static_cast<std::size_t>(info->FileNameLength);
+        if (nameBytes % sizeof(wchar_t) || nameBytes > bytes.size() - offset - fixedSize) {
+            degradePendingOld();
+            result.dirty = true;
+            return result;
+        }
+        const auto name = std::wstring_view(info->FileName, nameBytes / sizeof(wchar_t));
+        const auto path = pathUnderRoot(root, name);
+        if (!path) {
+            degradePendingOld();
+            result.dirty = true;
+            return result;
+        }
+
+        switch (info->Action) {
+        case FILE_ACTION_RENAMED_OLD_NAME:
+            degradePendingOld();
+            pendingOld = eventFor(root, info->Action, *path);
+            break;
+        case FILE_ACTION_RENAMED_NEW_NAME:
+            if (pendingOld && termination != WindowsWatcherDecodeTermination::Cancelled) {
+                auto renamed = eventFor(root, info->Action, *path);
+                renamed.kind = WatcherEventKind::Renamed;
+                renamed.previousPath = pendingOld->path;
+                result.events.push_back(std::move(renamed));
+                pendingOld.reset();
+            } else {
+                degradePendingOld();
+                result.events.push_back(eventFor(root, info->Action, *path));
+                result.events.back().kind = WatcherEventKind::Created;
+                result.dirty = true;
+            }
+            break;
+        case FILE_ACTION_ADDED:
+        case FILE_ACTION_REMOVED:
+        case FILE_ACTION_MODIFIED:
+            degradePendingOld();
+            result.events.push_back(eventFor(root, info->Action, *path));
+            break;
+        default:
+            degradePendingOld();
+            result.dirty = true;
+            break;
+        }
+
+        const auto recordSize = fixedSize + nameBytes;
+        if (!info->NextEntryOffset) {
+            if (recordSize < bytes.size() - offset
+                && std::any_of(bytes.begin() + static_cast<std::ptrdiff_t>(offset + recordSize), bytes.end(), [](std::byte value) { return value != std::byte{}; })) {
+                degradePendingOld();
+                result.dirty = true;
+            }
+            degradePendingOld();
+            return result;
+        }
+        const auto nextOffset = static_cast<std::size_t>(info->NextEntryOffset);
+        if (nextOffset < recordSize || nextOffset > bytes.size() - offset) {
+            degradePendingOld();
+            result.dirty = true;
+            return result;
+        }
+        offset += nextOffset;
+    }
+
+    degradePendingOld();
+    result.dirty = true;
+    return result;
+}
+} // namespace detail
 
 std::unique_ptr<IFileWatcher> makeWindowsFileWatcher() { return std::make_unique<WindowsFileWatcher>(); }
 } // namespace semantic_fs::monitoring

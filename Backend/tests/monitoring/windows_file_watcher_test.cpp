@@ -1,11 +1,14 @@
 #include "semantic_fs/monitoring/file_watcher_factory.h"
+#include "../../src/monitoring/windows_file_watcher_parser.h"
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
 #include <algorithm>
+#include <cstddef>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -59,7 +62,101 @@ public:
 };
 
 WatchRootConfig config(const std::filesystem::path& path) { return {*RootId::create("native-root"), {path.string()}, {}}; }
+
+WatchRootConfig parserConfig() { return {*RootId::create("parser-root"), {"C:/watch"}, {}}; }
+
+void appendRecord(std::vector<std::byte>& bytes, DWORD action, std::wstring_view name)
+{
+    const auto start = bytes.size();
+    std::size_t previous{};
+    while (previous < start) {
+        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(bytes.data() + previous);
+        if (!info->NextEntryOffset) break;
+        previous += info->NextEntryOffset;
+    }
+    bytes.resize(start + offsetof(FILE_NOTIFY_INFORMATION, FileName) + name.size() * sizeof(wchar_t));
+    auto* info = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(bytes.data() + start);
+    info->NextEntryOffset = 0;
+    info->Action = action;
+    info->FileNameLength = static_cast<DWORD>(name.size() * sizeof(wchar_t));
+    std::memcpy(info->FileName, name.data(), info->FileNameLength);
+    if (start) reinterpret_cast<FILE_NOTIFY_INFORMATION*>(bytes.data() + previous)->NextEntryOffset = static_cast<DWORD>(start - previous);
+}
 } // namespace
+
+TEST_CASE("monitoring windows_file_watcher: controlled parser bounds, UTF-16, and root containment")
+{
+    std::vector<std::byte> malformed(offsetof(FILE_NOTIFY_INFORMATION, FileName));
+    const auto malformedResult = detail::decodeWindowsWatcherRecords(parserConfig(), malformed);
+    REQUIRE(malformedResult.dirty);
+    REQUIRE(malformedResult.events.empty());
+
+    std::vector<std::byte> invalidUtf16;
+    appendRecord(invalidUtf16, FILE_ACTION_ADDED, std::wstring(1, static_cast<wchar_t>(0xD800)));
+    const auto invalidUtf16Result = detail::decodeWindowsWatcherRecords(parserConfig(), invalidUtf16);
+    REQUIRE(invalidUtf16Result.dirty);
+    REQUIRE(invalidUtf16Result.events.empty());
+
+    std::vector<std::byte> escaping;
+    appendRecord(escaping, FILE_ACTION_ADDED, L"..\\outside.txt");
+    const auto escapingResult = detail::decodeWindowsWatcherRecords(parserConfig(), escaping);
+    REQUIRE(escapingResult.dirty);
+    REQUIRE(escapingResult.events.empty());
+
+    std::vector<std::byte> valid;
+    appendRecord(valid, FILE_ACTION_ADDED, L"nested\\\u03B4.txt");
+    const auto validResult = detail::decodeWindowsWatcherRecords(parserConfig(), valid);
+    REQUIRE_FALSE(validResult.dirty);
+    REQUIRE(validResult.events.size() == 1);
+    REQUIRE(validResult.events.front().kind == WatcherEventKind::Created);
+    REQUIRE(validResult.events.front().path.utf8 == "C:/watch/nested/\xCE\xB4.txt");
+}
+
+TEST_CASE("monitoring windows_file_watcher: controlled parser degrades ambiguous and gapped rename evidence")
+{
+    std::vector<std::byte> contiguous;
+    appendRecord(contiguous, FILE_ACTION_RENAMED_OLD_NAME, L"old.txt");
+    appendRecord(contiguous, FILE_ACTION_RENAMED_NEW_NAME, L"new.txt");
+    const auto contiguousResult = detail::decodeWindowsWatcherRecords(parserConfig(), contiguous);
+    REQUIRE_FALSE(contiguousResult.dirty);
+    REQUIRE(contiguousResult.events.size() == 1);
+    REQUIRE(contiguousResult.events.front().kind == WatcherEventKind::Renamed);
+    REQUIRE(contiguousResult.events.front().previousPath->utf8 == "C:/watch/old.txt");
+    REQUIRE(contiguousResult.events.front().path.utf8 == "C:/watch/new.txt");
+
+    std::vector<std::byte> gapped;
+    appendRecord(gapped, FILE_ACTION_RENAMED_OLD_NAME, L"old.txt");
+    appendRecord(gapped, FILE_ACTION_MODIFIED, L"other.txt");
+    appendRecord(gapped, FILE_ACTION_RENAMED_NEW_NAME, L"new.txt");
+    const auto gappedResult = detail::decodeWindowsWatcherRecords(parserConfig(), gapped);
+    REQUIRE(gappedResult.dirty);
+    REQUIRE(gappedResult.events.size() == 3);
+    REQUIRE(gappedResult.events[0].kind == WatcherEventKind::Removed);
+    REQUIRE(gappedResult.events[1].kind == WatcherEventKind::Modified);
+    REQUIRE(gappedResult.events[2].kind == WatcherEventKind::Created);
+}
+
+TEST_CASE("monitoring windows_file_watcher: cancellation finalizes a pending rename without false identity")
+{
+    std::vector<std::byte> pendingOld;
+    appendRecord(pendingOld, FILE_ACTION_RENAMED_OLD_NAME, L"old.txt");
+    const auto cancelledOld = detail::decodeWindowsWatcherRecords(
+        parserConfig(), pendingOld, detail::WindowsWatcherDecodeTermination::Cancelled);
+    REQUIRE(cancelledOld.dirty);
+    REQUIRE(cancelledOld.events.size() == 1);
+    REQUIRE(cancelledOld.events.front().kind == WatcherEventKind::Removed);
+    REQUIRE_FALSE(cancelledOld.events.front().previousPath.has_value());
+
+    std::vector<std::byte> cancelledPair;
+    appendRecord(cancelledPair, FILE_ACTION_RENAMED_OLD_NAME, L"old.txt");
+    appendRecord(cancelledPair, FILE_ACTION_RENAMED_NEW_NAME, L"new.txt");
+    const auto cancelledResult = detail::decodeWindowsWatcherRecords(
+        parserConfig(), cancelledPair, detail::WindowsWatcherDecodeTermination::Cancelled);
+    REQUIRE(cancelledResult.dirty);
+    REQUIRE(cancelledResult.events.size() == 2);
+    REQUIRE(cancelledResult.events[0].kind == WatcherEventKind::Removed);
+    REQUIRE(cancelledResult.events[1].kind == WatcherEventKind::Created);
+}
 
 TEST_CASE("monitoring windows_file_watcher: factory captures a temporary-directory mutation")
 {
