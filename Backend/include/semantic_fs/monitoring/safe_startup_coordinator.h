@@ -34,6 +34,7 @@ private:
     bool reconciling_{};
     bool coverageRefused_{};
     bool pendingReconciliation_{};
+    std::optional<WatcherSequence> lastWatcherSequence_;
     InitialScanner scanner_;
 };
 } // namespace semantic_fs::monitoring

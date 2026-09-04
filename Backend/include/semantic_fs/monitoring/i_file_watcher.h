@@ -18,5 +18,6 @@ class IFileWatcher {
 public:
     virtual ~IFileWatcher() = default;
     virtual WatcherStartOutcome start(const WatchRootConfig& config, IWatcherIngressSink& ingress) = 0;
+    virtual StopOutcome stopAndJoin() noexcept = 0;
 };
 } // namespace semantic_fs::monitoring

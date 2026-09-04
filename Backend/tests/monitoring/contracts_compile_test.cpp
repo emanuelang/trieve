@@ -35,6 +35,7 @@ public:
 };
 class FakeWatcher final : public IFileWatcher {
 public:
+    StopOutcome stopAndJoin() noexcept override { return StopOutcome::AlreadyStopped; }
     WatcherStartOutcome start(const WatchRootConfig&, IWatcherIngressSink&) override { return {WatcherStartStatus::Started, std::make_shared<FakeSession>()}; }
 };
 static_assert(std::is_same_v<decltype(&IFileObservationSink::observe), ObservationDelivery (IFileObservationSink::*)(const FileObservation&)>);

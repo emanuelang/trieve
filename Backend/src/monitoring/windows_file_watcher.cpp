@@ -183,6 +183,15 @@ struct State final : IWatcherSession, std::enable_shared_from_this<State> {
 
 class WindowsFileWatcher final : public IFileWatcher {
 public:
+    StopOutcome stopAndJoin() noexcept override
+    {
+        std::shared_ptr<State> active;
+        {
+            std::lock_guard lock(mutex);
+            active = state.lock();
+        }
+        return active ? active->stopAndJoin() : StopOutcome::AlreadyStopped;
+    }
     WatcherStartOutcome start(const WatchRootConfig& root, IWatcherIngressSink& sink) override
     {
         std::lock_guard lock(mutex);

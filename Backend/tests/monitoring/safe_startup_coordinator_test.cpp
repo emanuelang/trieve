@@ -25,25 +25,31 @@ public:
     explicit Session(IWatcherIngressSink& ingress) : ingress_(ingress) {}
     BarrierRequestOutcome requestBarrier() noexcept override {
         const BarrierId id{++barriers};
-        if (emitAroundBarrier) ingress_.accept(WatcherRecord{WatcherSequence{1}, {*rootId, WatcherEventKind::Created, {"/root/pre"}, {}}});
-        if (barrierStatus == BarrierRequestStatus::Accepted && emitBarrier) ingress_.accept(BarrierReached{id, WatcherSequence{1}, GapEpoch{epoch}});
-        if (emitAroundBarrier) ingress_.accept(WatcherRecord{WatcherSequence{2}, {*rootId, WatcherEventKind::Modified, {"/root/post"}, {}}});
+        if (emitAroundBarrier) ingress_.accept(WatcherRecord{WatcherSequence{++nextSequence}, {*rootId, WatcherEventKind::Created, {"/root/pre"}, {}}});
+        if (barrierStatus == BarrierRequestStatus::Accepted && emitBarrier) ingress_.accept(BarrierReached{id, nextSequence, GapEpoch{epoch}});
+        if (emitAroundBarrier) ingress_.accept(WatcherRecord{WatcherSequence{++nextSequence}, {*rootId, WatcherEventKind::Modified, {"/root/post"}, {}}});
         return {barrierStatus, barrierStatus == BarrierRequestStatus::Accepted ? std::optional<BarrierId>{id} : std::nullopt};
     }
     CancelOutcome requestCancellation() noexcept override { return CancelOutcome::Requested; }
     StopOutcome stopAndJoin() noexcept override { joined = true; return StopOutcome::Stopped; }
-    IWatcherIngressSink& ingress_; std::optional<RootId> rootId; std::uint64_t barriers{}; std::uint64_t epoch{}; bool joined{}; bool emitBarrier{true}; bool emitAroundBarrier{}; BarrierRequestStatus barrierStatus{BarrierRequestStatus::Accepted};
+    IWatcherIngressSink& ingress_; std::optional<RootId> rootId; std::uint64_t barriers{}; WatcherSequence nextSequence{}; std::uint64_t epoch{}; bool joined{}; bool emitBarrier{true}; bool emitAroundBarrier{}; BarrierRequestStatus barrierStatus{BarrierRequestStatus::Accepted};
 };
 
 class Watcher final : public IFileWatcher {
 public:
+    StopOutcome stopAndJoin() noexcept override { return session ? session->stopAndJoin() : StopOutcome::AlreadyStopped; }
     WatcherStartOutcome start(const WatchRootConfig& root, IWatcherIngressSink& ingress) override {
         ++starts; session = std::make_shared<Session>(ingress); session->rootId = root.rootId; session->epoch = emitDirty ? 1 : barrierEpoch; session->emitAroundBarrier = emitAroundBarrier; session->emitBarrier = emitBarrier; session->barrierStatus = barrierStatus;
         if (emitDirty) ingress.accept(RootDirty{root.rootId, GapEpoch{1}, static_cast<std::uint32_t>(DirtyReason::OsOverflow)});
-        if (emitRecordAtStart) ingress.accept(WatcherRecord{WatcherSequence{1}, {root.rootId, WatcherEventKind::Created, {"/root/race"}, {}}});
+        if (emitRecordAtStart) ingress.accept(WatcherRecord{WatcherSequence{++session->nextSequence}, {root.rootId, WatcherEventKind::Created, {"/root/race"}, {}}});
+        if (emitSequenceGapAtStart) {
+            ingress.accept(WatcherRecord{WatcherSequence{++session->nextSequence}, {root.rootId, WatcherEventKind::Created, {"/root/one"}, {}}});
+            session->nextSequence += 2;
+            ingress.accept(WatcherRecord{session->nextSequence, {root.rootId, WatcherEventKind::Modified, {"/root/three"}, {}}});
+        }
         return {status, session};
     }
-    WatcherStartStatus status{WatcherStartStatus::Started}; bool emitDirty{}; bool emitRecordAtStart{}; bool emitAroundBarrier{}; bool emitBarrier{true}; GapEpoch barrierEpoch{}; BarrierRequestStatus barrierStatus{BarrierRequestStatus::Accepted}; unsigned starts{}; std::shared_ptr<Session> session;
+    WatcherStartStatus status{WatcherStartStatus::Started}; bool emitDirty{}; bool emitRecordAtStart{}; bool emitSequenceGapAtStart{}; bool emitAroundBarrier{}; bool emitBarrier{true}; GapEpoch barrierEpoch{}; BarrierRequestStatus barrierStatus{BarrierRequestStatus::Accepted}; unsigned starts{}; std::shared_ptr<Session> session;
 };
 
 FixtureView view() { FixtureView result; result.listings["/root"] = std::vector<FileSystemEntry>{{{"/root/a.txt"}, FileSystemEntryKind::RegularFile}}; result.metadataResults["/root/a.txt"] = FileMetadata{}; return result; }
@@ -109,6 +115,24 @@ TEST_CASE("monitoring: snapshot races and barriers preserve serialized ingress o
     REQUIRE(std::get<WatcherRecord>(std::get<WatcherIngress>(coverage.items[4])).event.path.utf8 == "/root/post");
 }
 
+TEST_CASE("monitoring: a watcher sequence discontinuity remains sticky ordering dirty until reconciliation")
+{
+    FixturePaths paths; FixtureClock clock; Watcher watcher; Coverage coverage; auto fileSystem = view();
+    watcher.emitSequenceGapAtStart = true;
+    watcher.barrierEpoch = 1;
+    SafeStartupCoordinator coordinator(fileSystem, paths, clock, watcher, coverage);
+    const auto outcome = coordinator.start(root(), {}, {});
+    REQUIRE(outcome.status == StartupStatus::Healthy);
+    REQUIRE(coverage.items.size() == 6);
+    REQUIRE(std::get<WatcherRecord>(std::get<WatcherIngress>(coverage.items[0])).sequence == 1);
+    const auto& dirty = std::get<RootDirty>(std::get<WatcherIngress>(coverage.items[1]));
+    REQUIRE((dirty.reasons & static_cast<std::uint32_t>(DirtyReason::OrderingGap)) != 0);
+    REQUIRE(std::get<WatcherRecord>(std::get<WatcherIngress>(coverage.items[2])).sequence == 3);
+    REQUIRE(std::get<FileObservation>(coverage.items[3]).source == ObservationSource::InitialScan);
+    REQUIRE(std::get<FileObservation>(coverage.items[4]).source == ObservationSource::Reconciliation);
+    REQUIRE(std::holds_alternative<BarrierReached>(std::get<WatcherIngress>(coverage.items[5])));
+}
+
 TEST_CASE("monitoring: nonhealthy exits retain sticky obligations and join the watcher")
 {
     SECTION("sink refusal") {
@@ -167,6 +191,23 @@ TEST_CASE("monitoring: gaps during reconciliation and cancellations remain pendi
         REQUIRE(watcher.starts == 2);
         REQUIRE(coverage.items.size() == 4);
         REQUIRE(std::get<FileObservation>(coverage.items[2]).source == ObservationSource::Reconciliation);
+    }
+    SECTION("fresh coordinator after interruption repeats watcher-first startup without retained coverage") {
+        FixturePaths paths; FixtureClock clock; Watcher interruptedWatcher; Coverage interruptedCoverage; auto fileSystem = view(); std::stop_source stop;
+        SafeStartupCoordinator interrupted(fileSystem, paths, clock, interruptedWatcher, interruptedCoverage);
+        const auto cancelled = interrupted.start(root(), {.checkpointHook = [&](ScanCheckpoint, const RelativePath&) { stop.request_stop(); return true; }}, stop.get_token());
+        REQUIRE(cancelled.status == StartupStatus::Cancelled);
+        REQUIRE(interruptedWatcher.session->joined);
+
+        Watcher freshWatcher; Coverage freshCoverage;
+        freshWatcher.emitRecordAtStart = true;
+        SafeStartupCoordinator fresh(fileSystem, paths, clock, freshWatcher, freshCoverage);
+        const auto restarted = fresh.start(root(), {}, {});
+        REQUIRE(restarted.status == StartupStatus::Healthy);
+        REQUIRE(freshWatcher.starts == 1);
+        REQUIRE(freshCoverage.items.size() == 3);
+        REQUIRE(std::get<WatcherRecord>(std::get<WatcherIngress>(freshCoverage.items[0])).event.path.utf8 == "/root/race");
+        REQUIRE(std::holds_alternative<FileObservation>(freshCoverage.items[1]));
     }
     SECTION("reconciliation cancellation") {
         FixturePaths paths; FixtureClock clock; Watcher watcher; Coverage coverage; auto fileSystem = view(); watcher.emitDirty = true; std::stop_source stop; unsigned checkpoints{};

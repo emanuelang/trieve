@@ -25,6 +25,23 @@ IngressDelivery SafeStartupCoordinator::accept(WatcherIngress ingress)
 {
     std::lock_guard lock(stateMutex_);
     if (health_ == RootHealth::Stopped) return IngressDelivery::Stopped;
+    if (const auto* record = std::get_if<WatcherRecord>(&ingress)) {
+        const bool orderingGap = record->sequence == 0
+            || (lastWatcherSequence_ && record->sequence != *lastWatcherSequence_ + 1);
+        lastWatcherSequence_ = record->sequence;
+        if (orderingGap) {
+            ++dirtyEpoch_;
+            dirtyReasons_ |= static_cast<std::uint32_t>(DirtyReason::OrderingGap);
+            health_ = RootHealth::Dirty;
+            pendingReconciliation_ = true;
+            if (!deliver(RootDirty{record->event.rootId, dirtyEpoch_, dirtyReasons_})) {
+                ++dirtyEpoch_;
+                dirtyReasons_ |= static_cast<std::uint32_t>(DirtyReason::SinkRefusal);
+                coverageRefused_ = true;
+                return IngressDelivery::Stopped;
+            }
+        }
+    }
     if (const auto* dirty = std::get_if<RootDirty>(&ingress)) {
         dirtyEpoch_ = std::max(dirtyEpoch_, dirty->epoch);
         dirtyReasons_ |= dirty->reasons;
@@ -63,6 +80,7 @@ StartupOutcome SafeStartupCoordinator::start(const WatchRootConfig& root, const 
         std::lock_guard lock(stateMutex_);
         const bool restartReconciliation = pendingReconciliation_;
         root_ = root; health_ = RootHealth::Starting; barrier_.reset(); coverageRefused_ = false;
+        lastWatcherSequence_.reset();
         if (!restartReconciliation) { dirtyEpoch_ = 0; dirtyReasons_ = 0; }
     }
     const auto started = watcher_.start(root, *this);

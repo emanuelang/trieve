@@ -21,6 +21,7 @@ public:
 
 class Watcher final : public IFileWatcher {
 public:
+    StopOutcome stopAndJoin() noexcept override { return StopOutcome::AlreadyStopped; }
     WatcherStartOutcome start(const WatchRootConfig&, IWatcherIngressSink&) override { return {WatcherStartStatus::Started, session}; }
     std::shared_ptr<Session> session = std::make_shared<Session>();
 };

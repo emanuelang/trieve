@@ -174,6 +174,13 @@ TEST_CASE("monitoring windows_file_watcher: factory captures a temporary-directo
     std::filesystem::remove_all(directory);
 }
 
+TEST_CASE("monitoring windows_file_watcher: stop before start is idempotently already stopped")
+{
+    auto watcher = makeFileWatcher();
+    REQUIRE(watcher->stopAndJoin() == StopOutcome::AlreadyStopped);
+    REQUIRE(watcher->stopAndJoin() == StopOutcome::AlreadyStopped);
+}
+
 TEST_CASE("monitoring windows_file_watcher: start and stop are idempotent")
 {
     const auto directory = std::filesystem::temp_directory_path() / ("semantic-fs-watcher-stop-" + std::to_string(GetCurrentProcessId()));
