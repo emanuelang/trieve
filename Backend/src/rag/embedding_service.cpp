@@ -30,6 +30,11 @@ std::vector<EmbeddingRecord> EmbeddingService::embedChunks(
     return embeddings;
 }
 
+std::vector<float> EmbeddingService::embedText(const std::string& text) const
+{
+    return model_->embed(text);
+}
+
 const IEmbeddingModel& EmbeddingService::model() const
 {
     return *model_;

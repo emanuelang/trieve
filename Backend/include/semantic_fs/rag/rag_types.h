@@ -80,6 +80,11 @@ struct EmbeddingRecord {
     std::vector<float> vector;
 };
 
+struct RetrievedChunk {
+    ChunkRecord chunk;
+    double score = 0.0;
+};
+
 struct RagIndexingResult {
     std::size_t rawSegmentCount = 0;
     std::size_t sanitizedSegmentCount = 0;

@@ -11,6 +11,7 @@ public:
     explicit RagModule(RagIndexingPipeline indexingPipeline);
 
     RagIndexingResult indexDocument(const semantic_fs::core::FileDocument& document) const;
+    std::vector<RetrievedChunk> retrieve(const std::string& question, std::size_t topK) const;
 
 private:
     RagIndexingPipeline indexingPipeline_;

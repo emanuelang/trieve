@@ -20,6 +20,9 @@ public:
     );
 
     RagIndexingResult index(const semantic_fs::core::FileDocument& document) const;
+    std::vector<RetrievedChunk> retrieve(const std::string& query, std::size_t topK) const;
+    const EmbeddingService& embeddingService() const;
+    const IRagRepository& repository() const;
 
 private:
     ContextSanitizer sanitizer_;

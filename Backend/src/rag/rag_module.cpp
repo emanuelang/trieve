@@ -37,4 +37,9 @@ RagIndexingResult RagModule::indexDocument(const semantic_fs::core::FileDocument
     return indexingPipeline_.index(document);
 }
 
+std::vector<RetrievedChunk> RagModule::retrieve(const std::string& question, std::size_t topK) const
+{
+    return indexingPipeline_.retrieve(question, topK);
+}
+
 } // namespace semantic_fs::rag

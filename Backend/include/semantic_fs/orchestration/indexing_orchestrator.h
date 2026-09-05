@@ -43,6 +43,7 @@ public:
     // Atajo para la prueba actual: recibe una ruta, crea FileDocument y lo
     // pasa por el flujo minimo de indexacion.
     FileDocument indexPath(const std::filesystem::path& filePath) const;
+    const semantic_fs::rag::RagModule& ragModule() const;
 
 private:
     semantic_fs::extractors::ExtractorFactory extractorFactory_;

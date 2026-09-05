@@ -13,6 +13,7 @@ public:
     explicit EmbeddingService(std::shared_ptr<IEmbeddingModel> model);
 
     std::vector<EmbeddingRecord> embedChunks(const std::vector<ChunkRecord>& chunks) const;
+    std::vector<float> embedText(const std::string& text) const;
     const IEmbeddingModel& model() const;
 
 private:

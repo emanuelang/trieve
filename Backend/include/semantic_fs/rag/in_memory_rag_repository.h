@@ -15,6 +15,11 @@ public:
         const std::vector<EmbeddingRecord>& embeddings
     ) override;
 
+    std::vector<RetrievedChunk> searchSimilar(
+        const std::vector<float>& queryEmbedding,
+        std::size_t topK
+    ) const override;
+
     const std::vector<ChunkRecord>& chunks() const;
     const std::vector<EmbeddingRecord>& embeddings() const;
 

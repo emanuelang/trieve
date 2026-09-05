@@ -16,6 +16,11 @@ public:
         const std::vector<ChunkRecord>& chunks,
         const std::vector<EmbeddingRecord>& embeddings
     ) = 0;
+
+    virtual std::vector<RetrievedChunk> searchSimilar(
+        const std::vector<float>& queryEmbedding,
+        std::size_t topK
+    ) const = 0;
 };
 
 } // namespace semantic_fs::rag

@@ -63,4 +63,9 @@ IndexingOrchestrator::FileDocument IndexingOrchestrator::indexPath(
     return indexFile(createDocument(filePath));
 }
 
+const semantic_fs::rag::RagModule& IndexingOrchestrator::ragModule() const
+{
+    return ragModule_;
+}
+
 } // namespace semantic_fs::orchestration

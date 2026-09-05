@@ -41,4 +41,23 @@ RagIndexingResult RagIndexingPipeline::index(const semantic_fs::core::FileDocume
     };
 }
 
+std::vector<RetrievedChunk> RagIndexingPipeline::retrieve(
+    const std::string& query,
+    std::size_t topK
+) const
+{
+    const auto queryEmbedding = embeddingService_.embedText(query);
+    return repository_->searchSimilar(queryEmbedding, topK);
+}
+
+const EmbeddingService& RagIndexingPipeline::embeddingService() const
+{
+    return embeddingService_;
+}
+
+const IRagRepository& RagIndexingPipeline::repository() const
+{
+    return *repository_;
+}
+
 } // namespace semantic_fs::rag

@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(CURL CONFIG REQUIRED)
 find_package(Tesseract CONFIG REQUIRED)
 find_package(unofficial-cld3 CONFIG REQUIRED)
 
@@ -39,6 +40,7 @@ target_link_libraries(semantic_fs_backend
     fmt::fmt
     spdlog::spdlog
     nlohmann_json::nlohmann_json
+    CURL::libcurl
     ${TESSERACT_TARGET}
     unofficial::cld3::cld3
 )
