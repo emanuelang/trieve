@@ -11,6 +11,7 @@ find_package(fmt CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Tesseract CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 
 if(TARGET libtesseract)
     set(TESSERACT_TARGET libtesseract)
@@ -39,6 +40,9 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/storage/database.cpp
     src/storage/files.cpp
     src/storage/vectors.cpp
+    src/storage/sqlite_raii.cpp
+    src/storage/sqlite_migrations.cpp
+    src/storage/sqlite_catalog_outbox.cpp
 )
 
 set(SEMANTIC_FS_WINDOWS_SCANNER_AVAILABLE OFF)
@@ -65,6 +69,7 @@ target_compile_definitions(semantic_fs_core PUBLIC SEMANTIC_FS_WINDOWS_SCANNER_A
 target_link_libraries(semantic_fs_core
     PUBLIC
     ${TESSERACT_TARGET}
+    unofficial::sqlite3::sqlite3
 )
 
 add_executable(semantic_fs_backend
@@ -89,6 +94,7 @@ if(BUILD_TESTING)
         tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp
         tests/monitoring/initial_scanner_test.cpp
+        tests/monitoring/sqlite_catalog_outbox_test.cpp
     )
     if(WIN32)
         target_sources(semantic_fs_core_tests PRIVATE

@@ -6,6 +6,7 @@
     "fmt",
     "spdlog",
     "nlohmann-json",
-    "tesseract"
+    "tesseract",
+    "sqlite3"
   ]
 }
