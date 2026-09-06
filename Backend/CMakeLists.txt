@@ -35,6 +35,7 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/scanner/scanner.cpp
     src/scanner/path_policy.cpp
     src/monitoring/safe_startup_coordinator.cpp
+    src/monitoring/outbox_publisher.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
@@ -95,6 +96,7 @@ if(BUILD_TESTING)
         tests/monitoring/path_policy_test.cpp
         tests/monitoring/initial_scanner_test.cpp
         tests/monitoring/sqlite_catalog_outbox_test.cpp
+        tests/monitoring/outbox_publisher_test.cpp
     )
     if(WIN32)
         target_sources(semantic_fs_core_tests PRIVATE
