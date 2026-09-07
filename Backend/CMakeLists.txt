@@ -37,6 +37,8 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/monitoring/safe_startup_coordinator.cpp
     src/monitoring/outbox_publisher.cpp
     src/monitoring/durable_startup_coverage_sink.cpp
+    src/monitoring/event_coalescer.cpp
+    src/monitoring/file_stability_probe.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
@@ -93,6 +95,7 @@ if(BUILD_TESTING)
         tests/extractors/image_extractor_smoke_test.cpp
         tests/monitoring/contracts_compile_test.cpp
         tests/monitoring/phase4_contracts_test.cpp
+        tests/monitoring/phase4_coalescing_stability_test.cpp
         tests/monitoring/watcher_contracts_test.cpp
         tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp
