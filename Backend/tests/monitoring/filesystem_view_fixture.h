@@ -39,7 +39,11 @@ public:
     ListResult list(const AbsolutePath& directory) const override { const auto it = listings.find(directory.utf8); return it == listings.end() ? ListResult{FsError{FsErrorCode::NotFound}} : it->second; }
     MetadataResult metadata(const AbsolutePath& path) const override { const auto it = metadataResults.find(path.utf8); return it == metadataResults.end() ? MetadataResult{FsError{FsErrorCode::NotFound}} : it->second; }
 };
-class FixtureClock final : public IClock { public: UtcTimestamp utcNow() const override { return {42}; } };
+class FixtureClock final : public IClock {
+public:
+    UtcTimestamp utcNow() const override { return {42}; }
+    MonotonicTimestamp monotonicNow() const override { return {42}; }
+};
 class FixtureSink final : public IFileObservationSink { public: std::vector<FileObservation> observations; ObservationDelivery next{ObservationDelivery::Accepted}; std::optional<std::size_t> stopAfterAccepted; ObservationDelivery observe(const FileObservation& observation) override { observations.push_back(observation); if (!stopAfterAccepted || observations.size() > *stopAfterAccepted) return next; return ObservationDelivery::Accepted; } };
 class ForbiddenChangeSink final : public IFileChangeSink { public: unsigned calls{}; PublishResult publish(const FileChange&) override { ++calls; return PublishResult::Accepted; } };
 } // namespace semantic_fs::monitoring::test

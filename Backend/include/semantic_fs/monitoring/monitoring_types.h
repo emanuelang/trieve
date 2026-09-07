@@ -72,6 +72,7 @@ struct Generation {
 };
 
 struct UtcTimestamp { std::int64_t microsecondsSinceEpoch; };
+struct MonotonicTimestamp { std::int64_t microsecondsSinceOrigin; };
 struct AbsolutePath { std::string utf8; };
 struct RelativePath { std::string utf8; std::vector<std::string> components; };
 struct NormalizedPath { std::string displayUtf8; RelativePath relative; };

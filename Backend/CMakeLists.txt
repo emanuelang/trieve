@@ -92,6 +92,7 @@ if(BUILD_TESTING)
     add_executable(semantic_fs_core_tests
         tests/extractors/image_extractor_smoke_test.cpp
         tests/monitoring/contracts_compile_test.cpp
+        tests/monitoring/phase4_contracts_test.cpp
         tests/monitoring/watcher_contracts_test.cpp
         tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp

@@ -14,6 +14,7 @@ namespace {
 class FakeClock final : public IClock {
 public:
     UtcTimestamp utcNow() const override { return {42}; }
+    MonotonicTimestamp monotonicNow() const override { return {42}; }
 };
 class FakeObservationSink final : public IFileObservationSink {
 public:
