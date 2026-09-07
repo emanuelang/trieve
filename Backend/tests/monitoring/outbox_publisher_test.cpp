@@ -53,9 +53,134 @@ TEST_CASE("Recoverable outbox publisher: retry, rejection, stale ACK, lease reco
     REQUIRE(writer->apply(change("pre-ack-crash.txt")).status == MutationStatus::Applied); auto beforeAck=writer->claim({"owner-d", {150}, {10}, 1}); REQUIRE(writer->recover({{160}, 1}).reclaimed == 1); auto republished=writer->claim({"owner-e", {160}, {10}, 1}); REQUIRE(republished.events[0].change.eventId.value() == beforeAck.events[0].change.eventId.value()); REQUIRE(writer->complete({republished.events[0].change.eventId, republished.events[0].token, PublishResult::Accepted, {0}, {}}) == DeliveryStatus::Updated);
 }
 
+TEST_CASE("Recoverable outbox publisher: reopens an outstanding lease and republishes its original event", "[outbox_publisher]")
+{
+    Paths paths;
+    Ids ids;
+    const auto path = database();
+    std::string leasedEvent;
+    {
+        auto writer = openSqliteCatalogOutbox(path, paths, ids, {});
+        REQUIRE(writer->apply(change("restart-before-ack.txt")).status == MutationStatus::Applied);
+        const auto claim = writer->claim({"owner-before-restart", {100}, {10}, 1});
+        REQUIRE(claim.status == ClaimStatus::Claimed);
+        REQUIRE(claim.events.size() == 1);
+        leasedEvent = std::string(claim.events.front().change.eventId.value());
+    }
+
+    Ids reopenedIds;
+    auto reopened = openSqliteCatalogOutbox(path, paths, reopenedIds, {});
+    const auto recovery = reopened->recover({{110}, 1});
+    REQUIRE(recovery.status == RecoveryStatus::Ready);
+    REQUIRE(recovery.reclaimed == 1);
+    REQUIRE(recovery.pending.size() == 1);
+    REQUIRE(recovery.pending.front().eventId.value() == leasedEvent);
+
+    Sink sink;
+    OutboxPublisher publisher(*reopened, sink, "publisher-after-restart");
+    REQUIRE(publisher.publish({{110}, 10, {20}, {120}}).published == 1);
+    REQUIRE(sink.calls == 1);
+    REQUIRE(sink.event == leasedEvent);
+    REQUIRE(reopened->pendingEventCount() == 0);
+}
+
 TEST_CASE("Recoverable outbox publisher: corrupt rows are quarantined without calling the sink", "[outbox_publisher]")
 {
     Paths paths; Ids ids; const auto path = database(); auto writer = openSqliteCatalogOutbox(path, paths, ids, {}); REQUIRE(writer->apply(change()).status == MutationStatus::Applied); REQUIRE(writer->apply(change("enum.txt")).status == MutationStatus::Applied); REQUIRE(writer->apply(change("payload.txt")).status == MutationStatus::Applied);
     sqlite3* raw = nullptr; REQUIRE(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK); REQUIRE(sqlite3_exec(raw, "UPDATE event_outbox SET schema_version=99 WHERE event_id='e1'; UPDATE event_outbox SET kind='future' WHERE event_id='e2'; UPDATE event_outbox SET payload=CAST(X'C0' AS TEXT) WHERE event_id='e3'", nullptr, nullptr, nullptr) == SQLITE_OK); sqlite3_close(raw);
     Sink sink; OutboxPublisher publisher(*writer, sink, "publisher"); REQUIRE(publisher.publish({{100}, 10, {20}}).quarantined == 1); REQUIRE(sink.calls == 0); REQUIRE(writer->pendingEventCount() == 0);
+}
+
+TEST_CASE("Recoverable outbox publisher: recovery quarantines corrupt durable bytes and exposes a terminal diagnostic", "[outbox_publisher]")
+{
+    Paths paths;
+    Ids ids;
+    const auto path = database();
+    auto writer = openSqliteCatalogOutbox(path, paths, ids, {});
+    REQUIRE(writer->apply(change()).status == MutationStatus::Applied);
+
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(raw, "UPDATE event_outbox SET payload=CAST(X'C0' AS TEXT) WHERE event_id='e1'", nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(raw);
+
+    const auto recovery = writer->recover({{100}, 10});
+    REQUIRE(recovery.status == RecoveryStatus::Corrupt);
+    REQUIRE(recovery.terminalDiagnostics.size() == 1);
+    REQUIRE(recovery.terminalDiagnostics.front().eventId.value() == "e1");
+    REQUIRE(recovery.terminalDiagnostics.front().message == "corrupt outbox row");
+
+    REQUIRE(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK);
+    sqlite3_stmt* statement = nullptr;
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT state, diagnostic, payload FROM event_outbox WHERE event_id='e1'", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "terminal");
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))) == "corrupt outbox row");
+    REQUIRE(sqlite3_column_bytes(statement, 2) == 1);
+    REQUIRE(static_cast<unsigned char>(*sqlite3_column_text(statement, 2)) == 0xC0);
+    sqlite3_finalize(statement);
+    sqlite3_close(raw);
+
+    Sink sink;
+    OutboxPublisher publisher(*writer, sink, "publisher");
+    REQUIRE(publisher.publish({{100}, 10, {20}}).published == 0);
+    REQUIRE(sink.calls == 0);
+}
+
+TEST_CASE("Recoverable outbox publisher: startup recovery quarantines invalid schema, kind, and payload rows", "[outbox_publisher]")
+{
+    Paths paths;
+    Ids ids;
+    const auto path = database();
+    {
+        auto writer = openSqliteCatalogOutbox(path, paths, ids, {});
+        REQUIRE(writer->apply(change("invalid-schema.txt")).status == MutationStatus::Applied);
+        REQUIRE(writer->apply(change("invalid-kind.txt")).status == MutationStatus::Applied);
+        REQUIRE(writer->apply(change("invalid-payload.txt")).status == MutationStatus::Applied);
+    }
+
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(raw, "UPDATE event_outbox SET schema_version=99 WHERE event_id='e1'; UPDATE event_outbox SET kind='future' WHERE event_id='e2'; UPDATE event_outbox SET payload=CAST(X'C0' AS TEXT) WHERE event_id='e3'", nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(raw);
+
+    Ids reopenedIds;
+    auto reopened = openSqliteCatalogOutbox(path, paths, reopenedIds, {});
+    const auto recovery = reopened->recover({{100}, 10});
+    REQUIRE(recovery.status == RecoveryStatus::Corrupt);
+    REQUIRE(recovery.terminalDiagnostics.size() == 3);
+    REQUIRE(recovery.terminalDiagnostics[0].eventId.value() == "e1");
+    REQUIRE(recovery.terminalDiagnostics[1].eventId.value() == "e2");
+    REQUIRE(recovery.terminalDiagnostics[2].eventId.value() == "e3");
+    REQUIRE(recovery.terminalDiagnostics[0].message == "corrupt outbox row");
+    REQUIRE(recovery.terminalDiagnostics[1].message == "corrupt outbox row");
+    REQUIRE(recovery.terminalDiagnostics[2].message == "corrupt outbox row");
+
+    REQUIRE(sqlite3_open(path.string().c_str(), &raw) == SQLITE_OK);
+    sqlite3_stmt* statement = nullptr;
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT state, diagnostic, schema_version, kind, payload FROM event_outbox WHERE event_id='e1'", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "terminal");
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))) == "corrupt outbox row");
+    REQUIRE(sqlite3_column_int(statement, 2) == 99);
+    sqlite3_finalize(statement);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT state, diagnostic, schema_version, kind, payload FROM event_outbox WHERE event_id='e2'", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "terminal");
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))) == "corrupt outbox row");
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 3))) == "future");
+    sqlite3_finalize(statement);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT state, diagnostic, schema_version, kind, payload FROM event_outbox WHERE event_id='e3'", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == "terminal");
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))) == "corrupt outbox row");
+    REQUIRE(sqlite3_column_bytes(statement, 4) == 1);
+    REQUIRE(static_cast<unsigned char>(*sqlite3_column_text(statement, 4)) == 0xC0);
+    sqlite3_finalize(statement);
+    sqlite3_close(raw);
+
+    Sink sink;
+    OutboxPublisher publisher(*reopened, sink, "publisher-after-corruption-restart");
+    REQUIRE(publisher.publish({{100}, 10, {20}}).published == 0);
+    REQUIRE(sink.calls == 0);
 }

@@ -20,8 +20,10 @@ enum class RecoveryStatus { Ready, ClockRollback, Corrupt, StorageFailure };
 enum class ClaimStatus { Claimed, Empty, ClockRollback, Corrupt, StorageFailure };
 enum class DeliveryStatus { Updated, StaleLease, Invalid, StorageFailure };
 struct PendingEventSummary { EventId eventId; UtcTimestamp availableAt; std::uint32_t attempts; };
+struct TerminalDiagnostic { EventId eventId; std::string message; };
 struct RecoveryRequest { UtcTimestamp now; std::size_t limit; };
-struct RecoveryResult { RecoveryStatus status; std::size_t reclaimed; std::vector<PendingEventSummary> pending; };
+struct RecoveryResult { RecoveryStatus status; std::size_t reclaimed; std::vector<PendingEventSummary> pending; std::vector<TerminalDiagnostic> terminalDiagnostics; };
+struct StoreRuntimeSettings { std::string journalMode; bool foreignKeysEnabled = false; bool synchronousFull = false; int busyTimeoutMilliseconds = 0; };
 struct ClaimRequest { std::string owner; UtcTimestamp now; UtcTimestamp duration; std::size_t limit; };
 struct ClaimedEvent { FileChange change; std::string token; UtcTimestamp deadline; };
 struct ClaimResult { ClaimStatus status; std::vector<ClaimedEvent> events; };
@@ -39,6 +41,7 @@ public:
     virtual std::uint32_t dirtyReasonCount(const RootId&) const = 0;
     virtual std::size_t deferredEvidenceCount() const = 0;
     virtual std::optional<Generation> generationFor(const RootId&, const NormalizedPath&) const = 0;
+    virtual StoreRuntimeSettings runtimeSettings() const { return {}; }
 };
 std::unique_ptr<ICatalogOutboxWriter> openSqliteCatalogOutbox(const std::filesystem::path&, const IPathSemantics&, IIdSource&, const CatalogOutboxConfig&);
 } // namespace semantic_fs::monitoring

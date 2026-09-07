@@ -188,3 +188,78 @@ TEST_CASE("SQLite catalog outbox: durable dirty obligations and excluded evidenc
     REQUIRE(writer->dirtyReasonCount(*RootId::create("root")) == 9);
     REQUIRE(writer->deferredEvidenceCount() == 1);
 }
+
+TEST_CASE("SQLite catalog outbox: exposes the configured SQLite durability policies and rejects a true future migration", "[sqlite_catalog_outbox]")
+{
+    CaseInsensitivePaths paths;
+    SequentialIds ids;
+    const auto database = temporaryDatabase();
+    auto writer = openSqliteCatalogOutbox(database, paths, ids, {});
+
+    const auto settings = writer->runtimeSettings();
+    REQUIRE(settings.journalMode == "wal");
+    REQUIRE(settings.foreignKeysEnabled);
+    REQUIRE(settings.synchronousFull);
+    REQUIRE(settings.busyTimeoutMilliseconds == 2500);
+
+    writer.reset();
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(database.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(raw, "INSERT INTO schema_migrations(version,checksum) VALUES(4,'future-version')", nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(raw);
+    REQUIRE_THROWS(openSqliteCatalogOutbox(database, paths, ids, {}));
+}
+
+TEST_CASE("SQLite catalog outbox: preserves observation and event identity across an alias reopen", "[sqlite_catalog_outbox]")
+{
+    CaseInsensitivePaths paths;
+    SequentialIds firstIds;
+    const auto database = temporaryDatabase();
+    {
+        auto writer = openSqliteCatalogOutbox(database, paths, firstIds, {});
+        REQUIRE(writer->apply(command("Report.txt")).status == MutationStatus::Applied);
+    }
+
+    sqlite3* raw = nullptr;
+    sqlite3_stmt* statement = nullptr;
+    REQUIRE(sqlite3_open(database.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT observation_id FROM observed_files", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    const std::string observationBefore = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
+    sqlite3_finalize(statement);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT event_id FROM event_outbox", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    const std::string eventBefore = reinterpret_cast<const char*>(sqlite3_column_text(statement, 0));
+    sqlite3_finalize(statement);
+    sqlite3_close(raw);
+
+    SequentialIds reopenedIds;
+    auto reopened = openSqliteCatalogOutbox(database, paths, reopenedIds, {});
+    REQUIRE(reopened->apply(command("report.TXT")).status == MutationStatus::Equivalent);
+    REQUIRE(reopened->pendingEventCount() == 1);
+
+    REQUIRE(sqlite3_open(database.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT observation_id FROM observed_files", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == observationBefore);
+    sqlite3_finalize(statement);
+    REQUIRE(sqlite3_prepare_v2(raw, "SELECT event_id FROM event_outbox", -1, &statement, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_step(statement) == SQLITE_ROW);
+    REQUIRE(std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 0))) == eventBefore);
+    sqlite3_finalize(statement);
+    sqlite3_close(raw);
+}
+
+TEST_CASE("SQLite catalog outbox: aggregate pending payload quota rolls back catalog and outbox", "[sqlite_catalog_outbox]")
+{
+    CaseInsensitivePaths paths;
+    SequentialIds ids;
+    CatalogOutboxConfig config;
+    config.hardPayloadBytes = 15;
+    auto writer = openSqliteCatalogOutbox(temporaryDatabase(), paths, ids, config);
+
+    REQUIRE(writer->apply(command("first.txt")).status == MutationStatus::Applied);
+    REQUIRE(writer->apply(command("second.txt")).status == MutationStatus::HardLimited);
+    REQUIRE(writer->pendingEventCount() == 1);
+    REQUIRE_FALSE(writer->generationFor(*RootId::create("root"), {"second.txt", {"second.txt"}}));
+}
