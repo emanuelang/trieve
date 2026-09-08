@@ -205,7 +205,7 @@ TEST_CASE("SQLite catalog outbox: exposes the configured SQLite durability polic
     writer.reset();
     sqlite3* raw = nullptr;
     REQUIRE(sqlite3_open(database.string().c_str(), &raw) == SQLITE_OK);
-    REQUIRE(sqlite3_exec(raw, "INSERT INTO schema_migrations(version,checksum) VALUES(4,'future-version')", nullptr, nullptr, nullptr) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(raw, "INSERT INTO schema_migrations(version,checksum) VALUES(5,'future-version')", nullptr, nullptr, nullptr) == SQLITE_OK);
     sqlite3_close(raw);
     REQUIRE_THROWS(openSqliteCatalogOutbox(database, paths, ids, {}));
 }

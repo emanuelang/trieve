@@ -10,7 +10,7 @@
 namespace semantic_fs::monitoring {
 enum class MutationStatus { Applied, Equivalent, SoftLimited, HardLimited, Invalid, StorageFailure };
 enum class CatalogOutboxFailpoint { None, BeforeCommit, AfterCommit };
-struct CatalogOutboxConfig { std::size_t hardPendingRows = 0; std::size_t hardPayloadBytes = 0; int busyTimeoutMilliseconds = 2500; std::string migrationChecksum = "catalog-outbox-v3"; std::size_t softPendingRows = 0; CatalogOutboxFailpoint failpoint = CatalogOutboxFailpoint::None; std::uint32_t schemaVersion = kFileChangeSchemaVersion; };
+struct CatalogOutboxConfig { std::size_t hardPendingRows = 0; std::size_t hardPayloadBytes = 0; int busyTimeoutMilliseconds = 2500; std::string migrationChecksum = "catalog-outbox-v4-root-path-metadata"; std::size_t softPendingRows = 0; CatalogOutboxFailpoint failpoint = CatalogOutboxFailpoint::None; std::uint32_t schemaVersion = kFileChangeSchemaVersion; };
 struct TransitionCommand { RootId rootId; NormalizedPath path; FileMetadata metadata; UtcTimestamp observedAt; ChangeKind kind; ObservationSource source; std::optional<Generation> expectedGeneration; };
 struct MutationResult { MutationStatus status; std::optional<EventId> eventId; std::optional<Generation> generation; };
 enum class CoverageStatus { Persisted, Deferred, Refused, StorageFailure };
