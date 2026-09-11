@@ -15,7 +15,7 @@ struct TransitionCommand { RootId rootId; NormalizedPath path; FileMetadata meta
 struct MutationResult { MutationStatus status; std::optional<EventId> eventId; std::optional<Generation> generation; };
 enum class ReconciliationStorageStatus { Started, Active, Busy, Stored, Invalid, StorageFailure };
 struct ReconciliationStagedObservation { NormalizedPath path; FileMetadata metadata; bool completedSubtree = false; };
-struct ReconciliationRun { RootId rootId; GapEpoch capturedEpoch; std::size_t scanCursor; std::size_t finalizeCursor; bool scanComplete; };
+struct ReconciliationRun { RootId rootId; GapEpoch capturedEpoch; std::size_t scanCursor; std::size_t finalizeCursor; bool scanArmed; };
 struct ReconciliationRead { ReconciliationStorageStatus status; std::optional<ReconciliationRun> run; std::vector<ReconciliationStagedObservation> staged; };
 enum class CoverageStatus { Persisted, Deferred, Refused, StorageFailure };
 struct CoverageCommand { RootId rootId; std::uint64_t epoch; std::uint32_t reasons; std::optional<ChangeKind> deferredKind; };

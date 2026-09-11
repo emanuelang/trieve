@@ -51,16 +51,20 @@ TEST_CASE("SQLite reconciliation storage: stages bounded cursor state across reo
         const auto staged = writer->beginReconciliation(root, 7, {100});
         REQUIRE(staged.staged.size() == 2);
         REQUIRE(staged.staged.front().completedSubtree);
-        REQUIRE(writer->advanceReconciliation(root, 7, 1, true) == ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 1, true) != ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 1, false) == ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 0, false) != ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 2, false) == ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 2, true) != ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->stageReconciliation(root, 7, {}) == ReconciliationStorageStatus::Stored);
+        REQUIRE(writer->advanceReconciliation(root, 7, 2, true) == ReconciliationStorageStatus::Stored);
     }
     auto reopened = openSqliteCatalogOutbox(file, paths, ids, {});
     const auto resumed = reopened->beginReconciliation(root, 7, {101});
     REQUIRE(resumed.status == ReconciliationStorageStatus::Active);
     REQUIRE(resumed.run->scanCursor == 2);
-    REQUIRE(resumed.run->finalizeCursor == 1);
-    REQUIRE(resumed.run->scanComplete);
-    REQUIRE(resumed.staged.size() == 1);
-    REQUIRE(resumed.staged.front().path.displayUtf8 == "b");
-    REQUIRE_FALSE(resumed.staged.front().completedSubtree);
+    REQUIRE(resumed.run->finalizeCursor == 2);
+    REQUIRE(resumed.run->scanArmed);
+    REQUIRE(resumed.staged.empty());
     REQUIRE(reopened->beginReconciliation(root, 8, {102}).status == ReconciliationStorageStatus::Busy);
 }
