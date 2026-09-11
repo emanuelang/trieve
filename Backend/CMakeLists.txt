@@ -39,6 +39,7 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/monitoring/durable_startup_coverage_sink.cpp
     src/monitoring/event_coalescer.cpp
     src/monitoring/file_stability_probe.cpp
+    src/monitoring/reconciliation_service.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
@@ -99,6 +100,7 @@ if(BUILD_TESTING)
         tests/monitoring/phase4_sqlite_migrations_test.cpp
         tests/monitoring/phase4_atomic_transitions_test.cpp
         tests/monitoring/phase4_reconciliation_storage_test.cpp
+        tests/monitoring/phase4_reconciliation_service_test.cpp
         tests/monitoring/watcher_contracts_test.cpp
         tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp
