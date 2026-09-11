@@ -263,3 +263,73 @@ TEST_CASE("SQLite catalog outbox: aggregate pending payload quota rolls back cat
     REQUIRE(writer->pendingEventCount() == 1);
     REQUIRE_FALSE(writer->generationFor(*RootId::create("root"), {"second.txt", {"second.txt"}}));
 }
+
+TEST_CASE("SQLite catalog outbox: reports the authoritative earliest durable retry", "[phase4.u6a]")
+{
+    CaseInsensitivePaths paths;
+    SequentialIds ids;
+    const auto database = temporaryDatabase();
+    {
+        auto writer = openSqliteCatalogOutbox(database, paths, ids, {});
+        for (int index = 0; index < 17; ++index) {
+            REQUIRE(writer->apply(command("retry-" + std::to_string(index))).status == MutationStatus::Applied);
+        }
+        const auto claimed = writer->claim({"publisher", {100}, {100}, 17});
+        REQUIRE(claimed.status == ClaimStatus::Claimed);
+        REQUIRE(claimed.events.size() == 17);
+        for (std::size_t index = 0; index < claimed.events.size(); ++index) {
+            const auto& event = claimed.events[index];
+            const auto availableAt = event.change.eventId.value() == "event-9" ? UtcTimestamp{1000} : UtcTimestamp{5000 + static_cast<std::int64_t>(index)};
+            REQUIRE(writer->complete({event.change.eventId, event.token, PublishResult::RetryableFailure, availableAt, "retry"}) == DeliveryStatus::Updated);
+        }
+        auto neverAttempted = command("never-attempted");
+        REQUIRE(writer->apply(neverAttempted).status == MutationStatus::Applied);
+
+        const auto earliest = writer->earliestPendingRetry();
+        REQUIRE(earliest.status == RetryQueryStatus::Found);
+        REQUIRE(earliest.availableAt);
+        REQUIRE(earliest.availableAt->microsecondsSinceEpoch == 1000);
+
+        const auto firstRetry = writer->claim({"publisher", {1000}, {100}, 2});
+        REQUIRE(firstRetry.status == ClaimStatus::Claimed);
+        REQUIRE(firstRetry.events.size() == 2);
+        for (const auto& event : firstRetry.events) {
+            REQUIRE(writer->complete({event.change.eventId, event.token, PublishResult::Accepted, {}, ""}) == DeliveryStatus::Updated);
+        }
+        const auto afterPartialResolution = writer->earliestPendingRetry();
+        REQUIRE(afterPartialResolution.status == RetryQueryStatus::Found);
+        REQUIRE(afterPartialResolution.availableAt);
+        REQUIRE(afterPartialResolution.availableAt->microsecondsSinceEpoch == 5000);
+    }
+
+    auto reopened = openSqliteCatalogOutbox(database, paths, ids, {});
+    const auto afterReopen = reopened->earliestPendingRetry();
+    REQUIRE(afterReopen.status == RetryQueryStatus::Found);
+    REQUIRE(afterReopen.availableAt);
+    REQUIRE(afterReopen.availableAt->microsecondsSinceEpoch == 5000);
+    const auto remainingRetries = reopened->claim({"publisher", {20000}, {100}, 32});
+    REQUIRE(remainingRetries.status == ClaimStatus::Claimed);
+    REQUIRE(remainingRetries.events.size() == 16);
+    for (const auto& event : remainingRetries.events) {
+        REQUIRE(reopened->complete({event.change.eventId, event.token, PublishResult::Accepted, {}, ""}) == DeliveryStatus::Updated);
+    }
+    const auto afterResolution = reopened->earliestPendingRetry();
+    REQUIRE(afterResolution.status == RetryQueryStatus::Empty);
+    REQUIRE_FALSE(afterResolution.availableAt);
+}
+
+TEST_CASE("SQLite catalog outbox: keeps retry query failure distinct from no retry", "[phase4.u6a]")
+{
+    CaseInsensitivePaths paths;
+    SequentialIds ids;
+    const auto database = temporaryDatabase();
+    auto writer = openSqliteCatalogOutbox(database, paths, ids, {});
+    sqlite3* raw = nullptr;
+    REQUIRE(sqlite3_open(database.string().c_str(), &raw) == SQLITE_OK);
+    REQUIRE(sqlite3_exec(raw, "DROP TABLE event_outbox", nullptr, nullptr, nullptr) == SQLITE_OK);
+    sqlite3_close(raw);
+
+    const auto result = writer->earliestPendingRetry();
+    REQUIRE(result.status == RetryQueryStatus::StorageFailure);
+    REQUIRE_FALSE(result.availableAt);
+}

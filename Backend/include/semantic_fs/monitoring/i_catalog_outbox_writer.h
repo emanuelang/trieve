@@ -23,7 +23,9 @@ struct CoverageResult { CoverageStatus status; };
 enum class RecoveryStatus { Ready, ClockRollback, Corrupt, StorageFailure };
 enum class ClaimStatus { Claimed, Empty, ClockRollback, Corrupt, StorageFailure };
 enum class DeliveryStatus { Updated, StaleLease, Invalid, StorageFailure };
+enum class RetryQueryStatus { Found, Empty, StorageFailure };
 struct PendingEventSummary { EventId eventId; UtcTimestamp availableAt; std::uint32_t attempts; };
+struct RetryQueryResult { RetryQueryStatus status; std::optional<UtcTimestamp> availableAt; };
 struct TerminalDiagnostic { EventId eventId; std::string message; };
 struct RecoveryRequest { UtcTimestamp now; std::size_t limit; };
 struct RecoveryResult { RecoveryStatus status; std::size_t reclaimed; std::vector<PendingEventSummary> pending; std::vector<TerminalDiagnostic> terminalDiagnostics; };
@@ -43,6 +45,7 @@ public:
     virtual RecoveryResult recover(const RecoveryRequest&) = 0;
     virtual ClaimResult claim(const ClaimRequest&) = 0;
     virtual DeliveryStatus complete(const DeliveryCommand&) = 0;
+    virtual RetryQueryResult earliestPendingRetry() const { return {RetryQueryStatus::StorageFailure, {}}; }
     virtual std::size_t pendingEventCount() const = 0;
     virtual UtcTimestamp lastSeenUtc() const = 0;
     virtual std::uint32_t dirtyReasonCount(const RootId&) const = 0;
