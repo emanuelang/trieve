@@ -106,6 +106,7 @@ if(BUILD_TESTING)
         tests/monitoring/path_policy_test.cpp
         tests/monitoring/initial_scanner_test.cpp
         tests/monitoring/sqlite_catalog_outbox_test.cpp
+        tests/monitoring/phase4_publisher_status_quota_test.cpp
         tests/monitoring/outbox_publisher_test.cpp
         tests/monitoring/durable_startup_coverage_sink_test.cpp
     )
