@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <span>
@@ -105,8 +106,12 @@ struct State final : IWatcherSession, std::enable_shared_from_this<State> {
     }
     void markDirty(DirtyReason reason)
     {
+        markDirty(static_cast<std::uint32_t>(reason));
+    }
+    void markDirty(std::uint32_t reasons)
+    {
         std::lock_guard lock(mutex);
-        dirtyReasons |= static_cast<std::uint32_t>(reason);
+        dirtyReasons |= reasons;
         ++dirtyEpoch;
         dirtyPending = true;
         wake.notify_one();
@@ -151,16 +156,17 @@ struct State final : IWatcherSession, std::enable_shared_from_this<State> {
             const auto waited = WaitForSingleObject(overlapped.hEvent, INFINITE);
             if (stopping) break;
             DWORD bytes{};
-            if (waited != WAIT_OBJECT_0 || !GetOverlappedResult(directory, &overlapped, &bytes, FALSE) || bytes == 0) { markDirty(DirtyReason::OsOverflow); continue; }
-            parse(buffer.data(), bytes);
+            if (waited != WAIT_OBJECT_0 || !GetOverlappedResult(directory, &overlapped, &bytes, FALSE)) { parse({}, detail::WindowsWatcherReadCompletion::Failed); continue; }
+            if (bytes == 0) { parse({}, detail::WindowsWatcherReadCompletion::ZeroBytes); continue; }
+            parse(std::span(buffer.data(), static_cast<std::size_t>(bytes)), detail::WindowsWatcherReadCompletion::Complete);
         }
     }
-    void parse(const std::byte* bytes, DWORD byteCount)
+    void parse(std::span<const std::byte> bytes, detail::WindowsWatcherReadCompletion completion)
     {
         const auto termination = stopping.load() ? detail::WindowsWatcherDecodeTermination::Cancelled : detail::WindowsWatcherDecodeTermination::BatchComplete;
-        auto decoded = detail::decodeWindowsWatcherRecords(root, std::span(bytes, static_cast<std::size_t>(byteCount)), termination);
+        auto decoded = detail::decodeWindowsWatcherRead(root, bytes, completion, termination);
         for (auto& event : decoded.events) enqueue(std::move(event));
-        if (decoded.dirty) markDirty(DirtyReason::DecodeGap);
+        if (decoded.dirty) markDirty(decoded.dirtyReasons);
     }
 
     WatchRootConfig root;
@@ -226,97 +232,123 @@ private:
 } // namespace
 
 namespace detail {
+namespace {
+struct WindowsNotifyHeader {
+    DWORD nextEntryOffset;
+    DWORD action;
+    DWORD fileNameLength;
+};
+
+static_assert(sizeof(WindowsNotifyHeader) == offsetof(FILE_NOTIFY_INFORMATION, FileName));
+} // namespace
+
 DecodedWindowsWatcherRecords decodeWindowsWatcherRecords(
     const WatchRootConfig& root,
     std::span<const std::byte> bytes,
     WindowsWatcherDecodeTermination termination)
 {
     DecodedWindowsWatcherRecords result;
-    result.dirty = termination == WindowsWatcherDecodeTermination::Cancelled;
+    if (termination == WindowsWatcherDecodeTermination::Cancelled) result.markDirty(DirtyReason::DecodeGap);
     std::optional<WatcherEvent> pendingOld;
     const auto degradePendingOld = [&] {
         if (!pendingOld) return;
         result.events.push_back(std::move(*pendingOld));
         pendingOld.reset();
-        result.dirty = true;
+        result.markDirty(DirtyReason::DecodeGap);
     };
 
     std::size_t offset{};
     while (offset < bytes.size()) {
-        constexpr auto fixedSize = offsetof(FILE_NOTIFY_INFORMATION, FileName);
+        constexpr auto fixedSize = sizeof(WindowsNotifyHeader);
         if (bytes.size() - offset < fixedSize) {
             degradePendingOld();
-            result.dirty = true;
+            result.markDirty(DirtyReason::DecodeGap);
             return result;
         }
-        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(bytes.data() + offset);
-        const auto nameBytes = static_cast<std::size_t>(info->FileNameLength);
+        WindowsNotifyHeader header{};
+        std::memcpy(&header, bytes.data() + offset, fixedSize);
+        const auto nameBytes = static_cast<std::size_t>(header.fileNameLength);
         if (nameBytes % sizeof(wchar_t) || nameBytes > bytes.size() - offset - fixedSize) {
             degradePendingOld();
-            result.dirty = true;
+            result.markDirty(DirtyReason::DecodeGap);
             return result;
         }
-        const auto name = std::wstring_view(info->FileName, nameBytes / sizeof(wchar_t));
+        std::wstring name(nameBytes / sizeof(wchar_t), L'\0');
+        std::memcpy(name.data(), bytes.data() + offset + fixedSize, nameBytes);
         const auto path = pathUnderRoot(root, name);
         if (!path) {
             degradePendingOld();
-            result.dirty = true;
+            result.markDirty(DirtyReason::DecodeGap);
             return result;
         }
 
-        switch (info->Action) {
+        switch (header.action) {
         case FILE_ACTION_RENAMED_OLD_NAME:
             degradePendingOld();
-            pendingOld = eventFor(root, info->Action, *path);
+            pendingOld = eventFor(root, header.action, *path);
             break;
         case FILE_ACTION_RENAMED_NEW_NAME:
             if (pendingOld && termination != WindowsWatcherDecodeTermination::Cancelled) {
-                auto renamed = eventFor(root, info->Action, *path);
+                auto renamed = eventFor(root, header.action, *path);
                 renamed.kind = WatcherEventKind::Renamed;
                 renamed.previousPath = pendingOld->path;
                 result.events.push_back(std::move(renamed));
                 pendingOld.reset();
             } else {
                 degradePendingOld();
-                result.events.push_back(eventFor(root, info->Action, *path));
+                result.events.push_back(eventFor(root, header.action, *path));
                 result.events.back().kind = WatcherEventKind::Created;
-                result.dirty = true;
+                result.markDirty(DirtyReason::DecodeGap);
             }
             break;
         case FILE_ACTION_ADDED:
         case FILE_ACTION_REMOVED:
         case FILE_ACTION_MODIFIED:
             degradePendingOld();
-            result.events.push_back(eventFor(root, info->Action, *path));
+            result.events.push_back(eventFor(root, header.action, *path));
             break;
         default:
             degradePendingOld();
-            result.dirty = true;
+            result.markDirty(DirtyReason::DecodeGap);
             break;
         }
 
         const auto recordSize = fixedSize + nameBytes;
-        if (!info->NextEntryOffset) {
+        if (!header.nextEntryOffset) {
             if (recordSize < bytes.size() - offset
                 && std::any_of(bytes.begin() + static_cast<std::ptrdiff_t>(offset + recordSize), bytes.end(), [](std::byte value) { return value != std::byte{}; })) {
                 degradePendingOld();
-                result.dirty = true;
+                result.markDirty(DirtyReason::DecodeGap);
             }
             degradePendingOld();
             return result;
         }
-        const auto nextOffset = static_cast<std::size_t>(info->NextEntryOffset);
+        const auto nextOffset = static_cast<std::size_t>(header.nextEntryOffset);
         if (nextOffset < recordSize || nextOffset > bytes.size() - offset) {
             degradePendingOld();
-            result.dirty = true;
+            result.markDirty(DirtyReason::DecodeGap);
             return result;
         }
         offset += nextOffset;
     }
 
     degradePendingOld();
-    result.dirty = true;
+    result.markDirty(DirtyReason::DecodeGap);
     return result;
+}
+
+DecodedWindowsWatcherRecords decodeWindowsWatcherRead(
+    const WatchRootConfig& root,
+    std::span<const std::byte> bytes,
+    WindowsWatcherReadCompletion completion,
+    WindowsWatcherDecodeTermination termination)
+{
+    if (completion != WindowsWatcherReadCompletion::Complete) {
+        DecodedWindowsWatcherRecords result;
+        result.markDirty(DirtyReason::OsOverflow);
+        return result;
+    }
+    return decodeWindowsWatcherRecords(root, bytes, termination);
 }
 } // namespace detail
 
