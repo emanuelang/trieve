@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -137,5 +138,20 @@ enum class StopOutcome { Stopped, AlreadyStopped };
 enum class WatcherStartStatus { Started, AlreadyStarted, Busy, InvalidConfig, RootUnavailable, NativeFailure };
 enum class StartupStatus { Healthy, Degraded, Cancelled };
 struct StartupOutcome { StartupStatus status; RootHealth health; std::optional<PendingReconciliation> pending; };
+
+struct FileMonitorConfig {
+    std::optional<std::size_t> maximumRoots;
+    std::optional<std::size_t> maximumStatusBytes;
+};
+enum class FileMonitorStartStatus { Started, AlreadyStarted, InvalidConfig, Degraded, Stopped };
+enum class FileMonitorStepStatus { Admitted, Stopped };
+struct FileMonitorStartOutcome { FileMonitorStartStatus status; RootHealth health; };
+struct RootStatusSnapshot {
+    RootHealth health{RootHealth::Stopped};
+    bool healthy{};
+    bool acceptingWork{};
+    bool pendingReconciliation{};
+    std::string diagnostic;
+};
 
 } // namespace semantic_fs::monitoring

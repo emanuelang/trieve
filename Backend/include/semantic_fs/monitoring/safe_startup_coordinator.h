@@ -12,6 +12,7 @@ class SafeStartupCoordinator final : public IWatcherIngressSink, public IFileObs
 public:
     SafeStartupCoordinator(const IFileSystemView& fileSystem, const IPathSemantics& paths, const IClock& clock, IFileWatcher& watcher, IStartupCoverageSink& coverage);
     StartupOutcome start(const WatchRootConfig& root, const ScanOptions& options, std::stop_token stopToken);
+    StopOutcome stop();
     IngressDelivery accept(WatcherIngress ingress) override;
     ObservationDelivery observe(const FileObservation& observation) override;
 

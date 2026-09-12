@@ -40,6 +40,7 @@ set(SEMANTIC_FS_CORE_SOURCES
     src/monitoring/event_coalescer.cpp
     src/monitoring/file_stability_probe.cpp
     src/monitoring/reconciliation_service.cpp
+    src/monitoring/file_monitor_service.cpp
     src/search/semantic_search.cpp
     src/storage/chunks.cpp
     src/storage/database.cpp
@@ -107,6 +108,7 @@ if(BUILD_TESTING)
         tests/monitoring/initial_scanner_test.cpp
         tests/monitoring/sqlite_catalog_outbox_test.cpp
         tests/monitoring/phase4_publisher_status_quota_test.cpp
+        tests/monitoring/phase4_file_monitor_lifecycle_test.cpp
         tests/monitoring/outbox_publisher_test.cpp
         tests/monitoring/durable_startup_coverage_sink_test.cpp
     )

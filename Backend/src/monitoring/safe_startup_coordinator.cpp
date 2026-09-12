@@ -4,6 +4,19 @@ namespace semantic_fs::monitoring {
 SafeStartupCoordinator::SafeStartupCoordinator(const IFileSystemView& fileSystem, const IPathSemantics& paths, const IClock& clock, IFileWatcher& watcher, IStartupCoverageSink& coverage)
     : fileSystem_(fileSystem), paths_(paths), clock_(clock), watcher_(watcher), coverage_(coverage), scanner_(fileSystem, paths, clock, *this) {}
 
+StopOutcome SafeStartupCoordinator::stop()
+{
+    std::shared_ptr<IWatcherSession> session;
+    {
+        std::lock_guard lock(stateMutex_);
+        if (health_ == RootHealth::Stopped) return StopOutcome::AlreadyStopped;
+        health_ = RootHealth::Stopped;
+        session = session_;
+    }
+    if (session) session->requestCancellation();
+    return session ? session->stopAndJoin() : StopOutcome::AlreadyStopped;
+}
+
 StartupOutcome SafeStartupCoordinator::leaveNonHealthy(StartupStatus status, DirtyReason reason)
 {
     std::lock_guard lock(stateMutex_);
@@ -85,7 +98,23 @@ StartupOutcome SafeStartupCoordinator::start(const WatchRootConfig& root, const 
     }
     const auto started = watcher_.start(root, *this);
     if (!started.session || (started.status != WatcherStartStatus::Started && started.status != WatcherStartStatus::AlreadyStarted)) return leaveNonHealthy(StartupStatus::Degraded, DirtyReason::NativeFailure);
-    session_ = started.session;
+    std::optional<PendingReconciliation> stoppedPending;
+    {
+        std::lock_guard lock(stateMutex_);
+        session_ = started.session;
+        if (health_ == RootHealth::Stopped) {
+            ++dirtyEpoch_;
+            dirtyReasons_ |= static_cast<std::uint32_t>(DirtyReason::Cancellation);
+            pendingReconciliation_ = true;
+            stoppedPending = PendingReconciliation{root_->rootId, dirtyEpoch_, dirtyReasons_};
+        }
+    }
+    if (stoppedPending) {
+        started.session->requestCancellation();
+        started.session->stopAndJoin();
+        coverage_.accept(*stoppedPending);
+        return {StartupStatus::Cancelled, RootHealth::Stopped, stoppedPending};
+    }
     if (stopToken.stop_requested()) {
         session_->requestCancellation(); session_->stopAndJoin();
         return leaveNonHealthy(StartupStatus::Cancelled, DirtyReason::Cancellation);
