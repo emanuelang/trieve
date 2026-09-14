@@ -134,7 +134,7 @@ enum class CoverageDelivery { Accepted, Refused };
 enum class BarrierRequestStatus { Accepted, Busy, Stopped };
 struct BarrierRequestOutcome { BarrierRequestStatus status; std::optional<BarrierId> id; };
 enum class CancelOutcome { Requested, AlreadyRequested, AlreadyStopped };
-enum class StopOutcome { Stopped, AlreadyStopped };
+enum class StopOutcome { Stopped, AlreadyStopped, NotAttempted };
 enum class WatcherStartStatus { Started, AlreadyStarted, Busy, InvalidConfig, RootUnavailable, NativeFailure };
 enum class StartupStatus { Healthy, Degraded, Cancelled };
 struct StartupOutcome { StartupStatus status; RootHealth health; std::optional<PendingReconciliation> pending; };
@@ -144,13 +144,38 @@ struct FileMonitorConfig {
     std::optional<std::size_t> maximumStatusBytes;
 };
 enum class FileMonitorStartStatus { Started, AlreadyStarted, InvalidConfig, Degraded, Stopped };
-enum class FileMonitorStepStatus { Admitted, Stopped };
+struct DrainBudget {
+    std::optional<std::size_t> maximumSteps;
+
+    [[nodiscard]] bool isFinite() const noexcept { return maximumSteps && *maximumSteps > 0; }
+};
+struct DrainStepProgress {
+    bool completed;
+    bool remaining;
+};
+class IShutdownDrain {
+public:
+    virtual ~IShutdownDrain() = default;
+    virtual DrainStepProgress drainOne() noexcept = 0;
+    virtual void releaseLease() noexcept = 0;
+};
+enum class FileMonitorStopStatus { Stopped, AlreadyStopped, NotAttempted, InvalidBudget };
+struct FileMonitorStopOutcome {
+    FileMonitorStopStatus status;
+    StopOutcome watcher;
+    std::size_t drainAttempts;
+    std::size_t drainCompleted;
+    bool drainBudgetExhausted;
+};
+enum class FileMonitorStepStatus { Admitted, QuotaPaused, ReconciliationUnavailable, Stopped };
 struct FileMonitorStartOutcome { FileMonitorStartStatus status; RootHealth health; };
 struct RootStatusSnapshot {
     RootHealth health{RootHealth::Stopped};
     bool healthy{};
     bool acceptingWork{};
     bool pendingReconciliation{};
+    bool saturated{};
+    bool publicationPrioritized{};
     std::string diagnostic;
 };
 
