@@ -35,7 +35,12 @@ struct ClaimRequest { std::string owner; UtcTimestamp now; UtcTimestamp duration
 struct ClaimedEvent { FileChange change; std::string token; UtcTimestamp deadline; };
 struct ClaimResult { ClaimStatus status; std::vector<ClaimedEvent> events; };
 struct DeliveryCommand { EventId eventId; std::string token; PublishResult outcome; UtcTimestamp availableAt; std::string diagnostic; };
-class ICatalogOutboxWriter {
+class IReconciliationObligationReader {
+public:
+    virtual ~IReconciliationObligationReader() = default;
+    virtual std::optional<PendingReconciliation> pendingReconciliation(const RootId&) const = 0;
+};
+class ICatalogOutboxWriter : public IReconciliationObligationReader {
 public:
     virtual ~ICatalogOutboxWriter() = default;
     virtual MutationResult apply(const TransitionCommand& command) = 0;
@@ -54,6 +59,7 @@ public:
     virtual std::size_t pendingEventCount() const = 0;
     virtual UtcTimestamp lastSeenUtc() const = 0;
     virtual std::uint32_t dirtyReasonCount(const RootId&) const = 0;
+    std::optional<PendingReconciliation> pendingReconciliation(const RootId&) const override { return {}; }
     virtual std::size_t deferredEvidenceCount() const = 0;
     virtual std::optional<Generation> generationFor(const RootId&, const NormalizedPath&) const = 0;
     virtual StoreRuntimeSettings runtimeSettings() const { return {}; }

@@ -49,9 +49,11 @@ private:
 class Watcher final : public IFileWatcher {
 public:
     WatcherStartOutcome start(const WatchRootConfig&, IWatcherIngressSink& ingress) override {
+        ++starts;
         return {WatcherStartStatus::Started, std::make_shared<Session>(ingress)};
     }
     StopOutcome stopAndJoin() noexcept override { return StopOutcome::Stopped; }
+    unsigned starts{};
 };
 
 class Executor final : public IReconciliationExecutor {
@@ -275,4 +277,59 @@ TEST_CASE("reconciliation scheduler: file monitor releases execution admission w
     REQUIRE(executor.calls == 1);
     REQUIRE(service.step() == FileMonitorStepStatus::Admitted);
     REQUIRE(executor.calls == 2);
+}
+
+TEST_CASE("restart recovery: file monitor reads persisted dirty work into watcher-first startup", "[phase4.u12]")
+{
+    FakeClock clock;
+    FixturePaths paths;
+    FixtureView files;
+    files.listings["/root"] = std::vector<FileSystemEntry>{};
+    Ids ids;
+    const auto file = database();
+    auto writer = openSqliteCatalogOutbox(file, paths, ids, {});
+    REQUIRE(writer->recordCoverage({root("root"), 7, static_cast<std::uint32_t>(DirtyReason::OsOverflow), {}}).status == CoverageStatus::Persisted);
+    writer.reset();
+
+    writer = openSqliteCatalogOutbox(file, paths, ids, {});
+    Watcher watcher;
+    DurableStartupCoverageSink coverage(*writer, paths, files, clock, watchedRoot());
+    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage);
+    Executor executor;
+    FileMonitorService service(startup, {.maximumRoots = 1, .maximumStatusBytes = 32}, nullptr, &executor, writer.get());
+
+    const auto started = service.start(watchedRoot(), {});
+    REQUIRE(watcher.starts == 1);
+    REQUIRE(started.status == FileMonitorStartStatus::Degraded);
+    REQUIRE(service.status(watchedRoot().rootId).health == RootHealth::Dirty);
+    REQUIRE(service.status(watchedRoot().rootId).pendingReconciliation);
+    REQUIRE_FALSE(service.status(watchedRoot().rootId).healthy);
+    REQUIRE((writer->dirtyReasonCount(watchedRoot().rootId) & static_cast<std::uint32_t>(DirtyReason::OsOverflow)) != 0);
+
+    REQUIRE(service.step() == FileMonitorStepStatus::Admitted);
+    REQUIRE(executor.epochs == std::vector<GapEpoch>{7});
+    REQUIRE(service.status(watchedRoot().rootId).healthy);
+}
+
+TEST_CASE("restart recovery: an absent durable obligation does not degrade watcher-first startup", "[phase4.u12]")
+{
+    FakeClock clock;
+    FixturePaths paths;
+    FixtureView files;
+    files.listings["/root"] = std::vector<FileSystemEntry>{};
+    Ids ids;
+    auto writer = openSqliteCatalogOutbox(database(), paths, ids, {});
+    Watcher watcher;
+    DurableStartupCoverageSink coverage(*writer, paths, files, clock, watchedRoot());
+    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage);
+    Executor executor;
+    FileMonitorService service(startup, {.maximumRoots = 1, .maximumStatusBytes = 32}, nullptr, &executor, writer.get());
+
+    const auto started = service.start(watchedRoot(), {});
+    REQUIRE(watcher.starts == 1);
+    REQUIRE(started.status == FileMonitorStartStatus::Started);
+    REQUIRE(service.status(watchedRoot().rootId).healthy);
+    REQUIRE_FALSE(service.status(watchedRoot().rootId).pendingReconciliation);
+    REQUIRE(service.step() == FileMonitorStepStatus::Admitted);
+    REQUIRE(executor.epochs == std::vector<GapEpoch>{0});
 }

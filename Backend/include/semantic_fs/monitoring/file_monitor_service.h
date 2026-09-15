@@ -13,12 +13,11 @@ class IReconciliationExecutor { public: virtual ~IReconciliationExecutor() = def
 
 class FileMonitorService final {
 public:
-    FileMonitorService(SafeStartupCoordinator& startup, FileMonitorConfig config, IShutdownDrain* drain = nullptr, IReconciliationExecutor* reconciliation = nullptr);
+    FileMonitorService(SafeStartupCoordinator& startup, FileMonitorConfig config, IShutdownDrain* drain = nullptr, IReconciliationExecutor* reconciliation = nullptr, IReconciliationObligationReader* obligations = nullptr);
 
     FileMonitorStartOutcome start(
         const WatchRootConfig& root,
         const ScanOptions& options,
-        std::optional<PendingReconciliation> recovered = std::nullopt,
         std::stop_token stopToken = {});
     FileMonitorStepStatus step();
     StopOutcome stop();
@@ -34,6 +33,7 @@ private:
     FileMonitorConfig config_;
     IShutdownDrain* drain_;
     IReconciliationExecutor* reconciliation_;
+    IReconciliationObligationReader* obligations_;
     mutable std::mutex mutex_;
     ReconciliationScheduler scheduler_;
     std::optional<WatchRootConfig> root_;

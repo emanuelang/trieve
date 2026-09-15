@@ -20,6 +20,14 @@ public:
     std::vector<StartupCoverage> items; std::function<void(const StartupCoverage&)> onAccept; std::function<CoverageDelivery(const StartupCoverage&)> deliveryFor;
 };
 
+class Obligations final : public IReconciliationObligationReader {
+public:
+    explicit Obligations(std::optional<PendingReconciliation> pending) : pending_(std::move(pending)) {}
+    std::optional<PendingReconciliation> pendingReconciliation(const RootId&) const override { return pending_; }
+private:
+    std::optional<PendingReconciliation> pending_;
+};
+
 class Session final : public IWatcherSession {
 public:
     explicit Session(IWatcherIngressSink& ingress, RootId rootId) : ingress_(ingress), rootId_(std::move(rootId)) {}
@@ -98,30 +106,30 @@ TEST_CASE("monitoring: file monitor refuses zero or unbounded limits", "[phase4.
 TEST_CASE("monitoring: file monitor starts watcher first, recovers dirty work, and fences health", "[phase4.u7]")
 {
     FixturePaths paths; FixtureClock clock; Watcher watcher; Coverage coverage; auto files = view();
-    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage); FileMonitorService service(startup, config());
+    Obligations obligations(PendingReconciliation{root().rootId, GapEpoch{1}, static_cast<std::uint32_t>(DirtyReason::OsOverflow)});
+    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage); FileMonitorService service(startup, config(), nullptr, nullptr, &obligations);
     RootHealth observed = RootHealth::Stopped;
     watcher.barrierEpoch = GapEpoch{1};
     watcher.duringStart = [&] { observed = service.status(root().rootId).health; };
 
-    const auto outcome = service.start(root(), {}, PendingReconciliation{root().rootId, GapEpoch{1}, static_cast<std::uint32_t>(DirtyReason::OsOverflow)});
+    const auto outcome = service.start(root(), {});
     REQUIRE(observed == RootHealth::Starting);
-    REQUIRE(outcome.status == FileMonitorStartStatus::Started);
-    REQUIRE(outcome.health == RootHealth::Healthy);
-    REQUIRE(service.status(root().rootId).healthy);
+    REQUIRE(outcome.status == FileMonitorStartStatus::Degraded);
+    REQUIRE(outcome.health == RootHealth::Dirty);
+    REQUIRE_FALSE(service.status(root().rootId).healthy);
     REQUIRE(watcher.starts == 1);
-    REQUIRE(coverage.items.size() == 4);
-    REQUIRE(std::holds_alternative<RootDirty>(std::get<WatcherIngress>(coverage.items.front())));
-    REQUIRE(std::get<FileObservation>(coverage.items[2]).source == ObservationSource::Reconciliation);
+    REQUIRE(coverage.items.size() == 2);
     REQUIRE(service.status(root().rootId).diagnostic.size() <= 32);
 }
 
 TEST_CASE("monitoring: file monitor fails closed for a foreign recovered obligation", "[phase4.u7]")
 {
     FixturePaths paths; FixtureClock clock; Watcher watcher; Coverage coverage; auto files = view();
-    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage); FileMonitorService service(startup, config());
+    Obligations obligations(PendingReconciliation{foreignRoot().rootId, GapEpoch{1}, static_cast<std::uint32_t>(DirtyReason::OsOverflow)});
+    SafeStartupCoordinator startup(files, paths, clock, watcher, coverage); FileMonitorService service(startup, config(), nullptr, nullptr, &obligations);
     watcher.barrierEpoch = GapEpoch{1};
 
-    const auto outcome = service.start(root(), {}, PendingReconciliation{foreignRoot().rootId, GapEpoch{1}, static_cast<std::uint32_t>(DirtyReason::OsOverflow)});
+    const auto outcome = service.start(root(), {});
     const auto snapshot = service.status(root().rootId);
     REQUIRE(outcome.status == FileMonitorStartStatus::Degraded);
     REQUIRE(snapshot.health == RootHealth::Dirty);

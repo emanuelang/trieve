@@ -2,8 +2,8 @@
 
 namespace semantic_fs::monitoring {
 
-FileMonitorService::FileMonitorService(SafeStartupCoordinator& startup, FileMonitorConfig config, IShutdownDrain* drain, IReconciliationExecutor* reconciliation)
-    : startup_(startup), config_(std::move(config)), drain_(drain), reconciliation_(reconciliation), scheduler_(startup.clock())
+FileMonitorService::FileMonitorService(SafeStartupCoordinator& startup, FileMonitorConfig config, IShutdownDrain* drain, IReconciliationExecutor* reconciliation, IReconciliationObligationReader* obligations)
+    : startup_(startup), config_(std::move(config)), drain_(drain), reconciliation_(reconciliation), obligations_(obligations), scheduler_(startup.clock())
 {
 }
 
@@ -29,20 +29,20 @@ bool FileMonitorService::scheduleReconciliation(ReconciliationTrigger trigger)
 FileMonitorStartOutcome FileMonitorService::start(
     const WatchRootConfig& root,
     const ScanOptions& options,
-    std::optional<PendingReconciliation> recovered,
     std::stop_token stopToken)
 {
+    const auto persisted = obligations_ ? obligations_->pendingReconciliation(root.rootId) : std::nullopt;
     {
         std::lock_guard lock(mutex_);
         if (!validConfig()) return {FileMonitorStartStatus::InvalidConfig, RootHealth::Stopped};
         if (stopped_) return {FileMonitorStartStatus::Stopped, RootHealth::Stopped};
         if (root_) return {FileMonitorStartStatus::AlreadyStarted, health_};
 
-        if (recovered && recovered->rootId.value() != root.rootId.value()) {
+        if (persisted && persisted->rootId.value() != root.rootId.value()) {
             root_ = root;
             health_ = RootHealth::Dirty;
             pendingReconciliation_ = true;
-            epoch_ = recovered->epoch;
+            epoch_ = persisted->epoch;
             diagnostic_ = boundedDiagnostic("foreign reconciliation obligation");
             return {FileMonitorStartStatus::Degraded, health_};
         }
@@ -50,33 +50,26 @@ FileMonitorStartOutcome FileMonitorService::start(
         root_ = root;
         health_ = RootHealth::Starting;
         acceptingWork_ = false;
-        pendingReconciliation_ = recovered.has_value();
-        epoch_ = recovered ? recovered->epoch : GapEpoch{};
+        pendingReconciliation_ = persisted.has_value();
+        epoch_ = persisted ? persisted->epoch : GapEpoch{};
         diagnostic_ = boundedDiagnostic("monitoring starting");
     }
-    ScanOptions startOptions = options;
-    if (recovered) {
-        const auto checkpoint = startOptions.checkpointHook;
-        bool restored = false;
-        startOptions.checkpointHook = [this, recovered, checkpoint, &restored](ScanCheckpoint point, const RelativePath& path) {
-            if (!restored) {
-                startup_.accept(RootDirty{recovered->rootId, recovered->epoch, recovered->reasons});
-                restored = true;
-            }
-            return !checkpoint || checkpoint(point, path);
-        };
-    }
-    const auto outcome = startup_.start(root, startOptions, stopToken);
+    const auto outcome = startup_.start(root, options, stopToken);
     {
         std::lock_guard lock(mutex_);
         if (stopped_) return {FileMonitorStartStatus::Stopped, RootHealth::Stopped};
         health_ = outcome.health;
         pendingReconciliation_ = outcome.pending.has_value();
         acceptingWork_ = outcome.status == StartupStatus::Healthy;
+        if (persisted) {
+            health_ = RootHealth::Dirty;
+            pendingReconciliation_ = true;
+            acceptingWork_ = true;
+        }
         if (outcome.status != StartupStatus::Cancelled) scheduleReconciliation(ReconciliationTrigger::Startup);
-        diagnostic_ = boundedDiagnostic(outcome.status == StartupStatus::Healthy ? "monitoring healthy" : "monitoring reconciliation required");
+        diagnostic_ = boundedDiagnostic(health_ == RootHealth::Healthy ? "monitoring healthy" : "monitoring reconciliation required");
     }
-    return {outcome.status == StartupStatus::Healthy ? FileMonitorStartStatus::Started : FileMonitorStartStatus::Degraded, health_};
+    return {health_ == RootHealth::Healthy ? FileMonitorStartStatus::Started : FileMonitorStartStatus::Degraded, health_};
 }
 
 FileMonitorStepStatus FileMonitorService::step()
@@ -105,6 +98,7 @@ FileMonitorStepStatus FileMonitorService::step()
             if (!stopped_ && pendingReconciliation_ && fencedCompletion && capturedFenceMatches && currentFenceMatches) {
                 pendingReconciliation_ = false;
                 health_ = RootHealth::Healthy;
+                acceptingWork_ = true;
                 diagnostic_ = boundedDiagnostic("monitoring healthy");
             }
         } catch (...) {
