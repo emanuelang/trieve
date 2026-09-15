@@ -5,6 +5,7 @@
     "fmt",
     "spdlog",
     "nlohmann-json",
-    "tesseract"
+    "tesseract",
+    "cld3"
   ]
 }
