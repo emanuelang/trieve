@@ -9,7 +9,7 @@ namespace {
 std::string join(const RelativePath& path) { std::string result; for (const auto& component : path.components) { result.push_back('\x1f'); result += component; } return result; }
 bool samePath(const IPathSemantics& paths, std::string_view stored, const RelativePath& current) { if (stored.empty() || stored.front() != '\x1f') return false; std::size_t start = 1, index = 0; while (start <= stored.size() && index < current.components.size()) { const auto end = stored.find('\x1f', start); if (paths.compareComponent(stored.substr(start, end == std::string_view::npos ? stored.size() - start : end - start), current.components[index++]) != 0) return false; if (end == std::string_view::npos) return index == current.components.size(); start = end + 1; } return false; }
 bool validPath(const NormalizedPath& path) { if (!isValidUtf8(path.displayUtf8) || !isValidUtf8(path.relative.utf8)) return false; for (const auto& component : path.relative.components) if (!isValidUtf8(component)) return false; return !path.relative.components.empty(); }
-NormalizedPath stagedPath(std::string_view stored) { RelativePath relative; for (std::size_t start = stored.empty() ? 0 : 1; start < stored.size();) { const auto end = stored.find('\x1f', start); relative.components.emplace_back(stored.substr(start, end == std::string_view::npos ? stored.size() - start : end - start)); if (end == std::string_view::npos) break; start = end + 1; } relative.utf8 = relative.components.empty() ? "" : relative.components.back(); return {relative.utf8, std::move(relative)}; }
+NormalizedPath stagedPath(std::string_view stored) { RelativePath relative; std::string display; for (std::size_t start = stored.empty() ? 0 : 1; start < stored.size();) { const auto end = stored.find('\x1f', start); const auto component = stored.substr(start, end == std::string_view::npos ? stored.size() - start : end - start); if (!display.empty()) display += '/'; display += component; relative.components.emplace_back(component); if (end == std::string_view::npos) break; start = end + 1; } relative.utf8 = relative.components.empty() ? "" : relative.components.back(); return {std::move(display), std::move(relative)}; }
 const char* kindName(ChangeKind kind) { switch (kind) { case ChangeKind::Discovered: return "discovered"; case ChangeKind::Created: return "created"; case ChangeKind::Modified: return "modified"; case ChangeKind::Removed: return "removed"; case ChangeKind::Renamed: return "renamed"; } return ""; }
 bool validKind(std::string_view kind) { return kind == "discovered" || kind == "created" || kind == "modified" || kind == "removed" || kind == "renamed"; }
 ChangeKind changeKind(std::string_view kind) { return kind == "created" ? ChangeKind::Created : kind == "modified" ? ChangeKind::Modified : kind == "removed" ? ChangeKind::Removed : kind == "renamed" ? ChangeKind::Renamed : ChangeKind::Discovered; }
@@ -167,6 +167,29 @@ public:
     }
     std::size_t pendingEventCount() const override { sqlite3_stmt* statement = nullptr; sqlite3_prepare_v2(database_.get(), "SELECT count(*) FROM event_outbox WHERE state='pending'", -1, &statement, nullptr); const auto count = sqlite3_step(statement) == SQLITE_ROW ? static_cast<std::size_t>(sqlite3_column_int64(statement, 0)) : 0; sqlite3_finalize(statement); return count; }
     std::size_t reconciliationFinalOutboxCount(const RootId& root) const override { sqlite3_stmt* statement=nullptr; if(sqlite3_prepare_v2(database_.get(), "SELECT count(*) FROM reconciliation_final_outbox p JOIN reconciliation_runs r ON r.run_id=p.run_id WHERE r.root_id=?", -1, &statement, nullptr)!=SQLITE_OK) return 0; sqlite3_bind_text(statement, 1, root.value().data(), -1, SQLITE_TRANSIENT); const auto count=sqlite3_step(statement)==SQLITE_ROW?static_cast<std::size_t>(sqlite3_column_int64(statement,0)):0; sqlite3_finalize(statement); return count; }
+    CatalogPage catalogPage(const RootId& root, std::size_t cursor) const override {
+        sqlite3_stmt* statement = nullptr;
+        try {
+            if (sqlite3_prepare_v2(database_.get(), "SELECT rowid,path,native_identity,size,modified_at FROM observed_files WHERE root_id=? AND tombstoned=0 AND rowid>? ORDER BY rowid LIMIT 257", -1, &statement, nullptr) != SQLITE_OK) return {ReconciliationStorageStatus::StorageFailure, cursor, false, {}};
+            sqlite3_bind_text(statement, 1, root.value().data(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(statement, 2, static_cast<sqlite3_int64>(cursor));
+            CatalogPage page{ReconciliationStorageStatus::Stored, cursor, true, {}};
+            while (sqlite3_step(statement) == SQLITE_ROW) {
+                if (page.entries.size() == 256) { page.complete = false; break; }
+                FileMetadata metadata;
+                if (sqlite3_column_type(statement, 2) != SQLITE_NULL) metadata.nativeFileId = std::string(reinterpret_cast<const char*>(sqlite3_column_text(statement, 2)));
+                if (sqlite3_column_type(statement, 3) != SQLITE_NULL) metadata.size = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 3));
+                if (sqlite3_column_type(statement, 4) != SQLITE_NULL) metadata.modifiedAt = UtcTimestamp{sqlite3_column_int64(statement, 4)};
+                page.cursor = static_cast<std::size_t>(sqlite3_column_int64(statement, 0));
+                page.entries.push_back({stagedPath(reinterpret_cast<const char*>(sqlite3_column_text(statement, 1))), std::move(metadata)});
+            }
+            sqlite3_finalize(statement);
+            return page;
+        } catch (...) {
+            if (statement) sqlite3_finalize(statement);
+            return {ReconciliationStorageStatus::StorageFailure, cursor, false, {}};
+        }
+    }
     UtcTimestamp lastSeenUtc() const override { sqlite3_stmt* statement=nullptr; sqlite3_prepare_v2(database_.get(),"SELECT last_seen_utc FROM store_runtime WHERE singleton=1",-1,&statement,nullptr); const auto value=sqlite3_step(statement)==SQLITE_ROW?sqlite3_column_int64(statement,0):0; sqlite3_finalize(statement); return {value}; }
     std::uint32_t dirtyReasonCount(const RootId& root) const override { sqlite3_stmt* statement=nullptr; sqlite3_prepare_v2(database_.get(),"SELECT reasons FROM dirty_obligations WHERE root_id=?",-1,&statement,nullptr); sqlite3_bind_text(statement,1,root.value().data(),-1,SQLITE_TRANSIENT); const auto value=sqlite3_step(statement)==SQLITE_ROW?static_cast<std::uint32_t>(sqlite3_column_int(statement,0)):0; sqlite3_finalize(statement); return value; }
     std::optional<PendingReconciliation> pendingReconciliation(const RootId& root) const override { sqlite3_stmt* statement=nullptr; if(sqlite3_prepare_v2(database_.get(),"SELECT epoch,reasons FROM dirty_obligations WHERE root_id=?",-1,&statement,nullptr)!=SQLITE_OK) return {}; sqlite3_bind_text(statement,1,root.value().data(),-1,SQLITE_TRANSIENT); std::optional<PendingReconciliation> pending; if(sqlite3_step(statement)==SQLITE_ROW) pending=PendingReconciliation{root,static_cast<GapEpoch>(sqlite3_column_int64(statement,0)),static_cast<std::uint32_t>(sqlite3_column_int(statement,1))}; sqlite3_finalize(statement); return pending; }

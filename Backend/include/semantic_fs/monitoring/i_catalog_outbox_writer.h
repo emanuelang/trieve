@@ -17,6 +17,8 @@ enum class ReconciliationStorageStatus { Started, Active, Busy, Stored, Invalid,
 struct ReconciliationStagedObservation { NormalizedPath path; FileMetadata metadata; bool completedSubtree = false; };
 struct ReconciliationRun { RootId rootId; GapEpoch capturedEpoch; std::size_t scanCursor; std::size_t finalizeCursor; bool scanArmed; std::string runId; std::optional<WatcherSequence> requiredHighWater; std::optional<EventId> finalOutboxEvent; };
 struct ReconciliationRead { ReconciliationStorageStatus status; std::optional<ReconciliationRun> run; std::vector<ReconciliationStagedObservation> staged; };
+struct CatalogPageEntry { NormalizedPath path; FileMetadata metadata; };
+struct CatalogPage { ReconciliationStorageStatus status; std::size_t cursor; bool complete; std::vector<CatalogPageEntry> entries; };
 struct ReconciliationCompletion { RootId rootId; std::string runId; GapEpoch epoch; BarrierReached barrier; std::optional<EventId> finalOutboxEvent; WatcherSequence requiredHighWater; };
 enum class CoverageStatus { Persisted, Deferred, Refused, StorageFailure };
 struct CoverageCommand { RootId rootId; std::uint64_t epoch; std::uint32_t reasons; std::optional<ChangeKind> deferredKind; };
@@ -50,6 +52,7 @@ public:
     virtual ReconciliationStorageStatus armReconciliation(const RootId&, GapEpoch, WatcherSequence) { return ReconciliationStorageStatus::StorageFailure; }
     virtual ReconciliationStorageStatus advanceReconciliation(const RootId&, GapEpoch, std::size_t, bool) { return ReconciliationStorageStatus::StorageFailure; }
     virtual ReconciliationStorageStatus completeReconciliation(const ReconciliationCompletion&) { return ReconciliationStorageStatus::StorageFailure; }
+    virtual CatalogPage catalogPage(const RootId&, std::size_t cursor) const { return {ReconciliationStorageStatus::StorageFailure, cursor, false, {}}; }
     virtual std::size_t reconciliationFinalOutboxCount(const RootId&) const { return 0; }
     virtual CoverageResult recordCoverage(const CoverageCommand& command) = 0;
     virtual RecoveryResult recover(const RecoveryRequest&) = 0;

@@ -52,6 +52,11 @@ ReconciliationStepResult ReconciliationService::step(ICatalogOutboxWriter& write
     for(const auto& item:catalog) if(std::none_of(read.staged.begin(),read.staged.end(),[&](const auto& disk){return same(item.path.relative,disk.path.relative);})&&std::any_of(read.staged.begin(),read.staged.end(),[&](const auto& disk){return disk.completedSubtree&&covers(disk.path.relative,item.path.relative);})) { if(!recorded(writer.applyReconciliation(runId_,{root,item.path,item.metadata,now,ChangeKind::Removed,ObservationSource::Reconciliation,{}}))) return {ReconciliationStepStatus::Dirty,applied}; ++applied; }
     const auto cursor=read.run->finalizeCursor+read.staged.size(); const bool complete=read.run->scanArmed&&cursor==read.run->scanCursor; if(writer.advanceReconciliation(root,epoch,cursor,complete)!=ReconciliationStorageStatus::Stored) return {ReconciliationStepStatus::Dirty,applied}; if(!complete) return {ReconciliationStepStatus::Dirty,applied}; root_=root; epoch_=epoch; requiredHighWater_=read.run->requiredHighWater.value_or(0); return {ReconciliationStepStatus::AwaitingBarrier,applied};
 }
+ReconciliationStepResult ReconciliationService::stepPage(ICatalogOutboxWriter& writer, const RootId& root, GapEpoch epoch, const CatalogPage& catalog, UtcTimestamp now)
+{
+    if (catalog.status != ReconciliationStorageStatus::Stored || catalog.entries.size() > 256) return {ReconciliationStepStatus::Dirty, 0};
+    return step(writer, root, epoch, catalog.entries, now);
+}
 bool ReconciliationService::accept(BarrierReached barrier) { if(!root_||barrier.epoch!=epoch_) { eligible_=false; return false; } eligible_=true; return true; }
 bool ReconciliationService::accept(ICatalogOutboxWriter& writer, BarrierReached barrier)
 {

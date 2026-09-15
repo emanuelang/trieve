@@ -7,7 +7,7 @@
 
 namespace semantic_fs::monitoring {
 enum class ReconciliationStepStatus { AwaitingBarrier, Dirty, Busy };
-struct ReconciliationCatalogEntry { NormalizedPath path; FileMetadata metadata; };
+using ReconciliationCatalogEntry = CatalogPageEntry;
 struct ReconciliationStepResult { ReconciliationStepStatus status; std::size_t applied; };
 
 enum class ReconciliationTrigger { Startup, Interval, DirtyOverflow, PostSaturation };
@@ -32,6 +32,7 @@ private:
 class ReconciliationService {
 public:
     ReconciliationStepResult step(ICatalogOutboxWriter&, const RootId&, GapEpoch, const std::vector<ReconciliationCatalogEntry>&, UtcTimestamp);
+    ReconciliationStepResult stepPage(ICatalogOutboxWriter&, const RootId&, GapEpoch, const CatalogPage&, UtcTimestamp);
     bool accept(BarrierReached);
     bool accept(ICatalogOutboxWriter&, BarrierReached);
     [[nodiscard]] bool dirtyClearEligible() const { return eligible_; }
