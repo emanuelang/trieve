@@ -11,6 +11,7 @@ namespace semantic_fs::monitoring {
 class SafeStartupCoordinator final : public IWatcherIngressSink, public IFileObservationSink {
 public:
     SafeStartupCoordinator(const IFileSystemView& fileSystem, const IPathSemantics& paths, const IClock& clock, IFileWatcher& watcher, IStartupCoverageSink& coverage);
+    [[nodiscard]] const IClock& clock() const noexcept { return clock_; }
     StartupOutcome start(const WatchRootConfig& root, const ScanOptions& options, std::stop_token stopToken);
     StopOutcome stop();
     IngressDelivery accept(WatcherIngress ingress) override;

@@ -3,7 +3,7 @@
 namespace semantic_fs::monitoring {
 
 FileMonitorService::FileMonitorService(SafeStartupCoordinator& startup, FileMonitorConfig config, IShutdownDrain* drain, IReconciliationExecutor* reconciliation)
-    : startup_(startup), config_(std::move(config)), drain_(drain), reconciliation_(reconciliation)
+    : startup_(startup), config_(std::move(config)), drain_(drain), reconciliation_(reconciliation), scheduler_(startup.clock())
 {
 }
 
@@ -16,6 +16,14 @@ bool FileMonitorService::validConfig() const
 std::string FileMonitorService::boundedDiagnostic(std::string_view value) const
 {
     return std::string(value.substr(0, *config_.maximumStatusBytes));
+}
+
+bool FileMonitorService::scheduleReconciliation(ReconciliationTrigger trigger)
+{
+    if (!reconciliation_ || !root_) return false;
+    if (scheduler_.request(root_->rootId, epoch_, trigger) != ReconciliationAdmissionStatus::Admitted) return false;
+    scheduledReconciliation_ = true;
+    return true;
 }
 
 FileMonitorStartOutcome FileMonitorService::start(
@@ -65,6 +73,7 @@ FileMonitorStartOutcome FileMonitorService::start(
         health_ = outcome.health;
         pendingReconciliation_ = outcome.pending.has_value();
         acceptingWork_ = outcome.status == StartupStatus::Healthy;
+        if (outcome.status != StartupStatus::Cancelled) scheduleReconciliation(ReconciliationTrigger::Startup);
         diagnostic_ = boundedDiagnostic(outcome.status == StartupStatus::Healthy ? "monitoring healthy" : "monitoring reconciliation required");
     }
     return {outcome.status == StartupStatus::Healthy ? FileMonitorStartStatus::Started : FileMonitorStartStatus::Degraded, health_};
@@ -76,20 +85,32 @@ FileMonitorStepStatus FileMonitorService::step()
     {
         std::lock_guard lock(mutex_);
         if (stopped_) return FileMonitorStepStatus::Stopped;
+        if (!scheduledReconciliation_) scheduleReconciliation(ReconciliationTrigger::Interval);
         if (!quota_.reconciliationAdmissionAllowed || !acceptingWork_ || dirtyAdmissionPending_) return FileMonitorStepStatus::QuotaPaused;
-        if (pendingReconciliation_ && (!reconciliation_ || !root_)) return FileMonitorStepStatus::ReconciliationUnavailable;
-        if (pendingReconciliation_) pending = {{root_->rootId, epoch_}};
+        if ((pendingReconciliation_ || scheduledReconciliation_) && (!reconciliation_ || !root_)) return FileMonitorStepStatus::ReconciliationUnavailable;
+        if ((pendingReconciliation_ || scheduledReconciliation_) && !reconciliationExecutionInFlight_) {
+            pending = {{root_->rootId, epoch_}};
+            reconciliationExecutionInFlight_ = true;
+        }
     }
     if (pending) {
-        const auto execution = reconciliation_->step(pending->first, pending->second);
-        const bool fencedCompletion = execution.fencedComplete;
-        std::lock_guard lock(mutex_);
-        const bool capturedFenceMatches = execution.rootId.value() == pending->first.value() && execution.epoch == pending->second;
-        const bool currentFenceMatches = root_ && root_->rootId.value() == pending->first.value() && epoch_ == pending->second;
-        if (!stopped_ && pendingReconciliation_ && fencedCompletion && capturedFenceMatches && currentFenceMatches) {
-            pendingReconciliation_ = false;
-            health_ = RootHealth::Healthy;
-            diagnostic_ = boundedDiagnostic("monitoring healthy");
+        try {
+            const auto execution = reconciliation_->step(pending->first, pending->second);
+            const bool fencedCompletion = execution.fencedComplete;
+            std::lock_guard lock(mutex_);
+            reconciliationExecutionInFlight_ = false;
+            const bool capturedFenceMatches = execution.rootId.value() == pending->first.value() && execution.epoch == pending->second;
+            const bool currentFenceMatches = root_ && root_->rootId.value() == pending->first.value() && epoch_ == pending->second;
+            if (scheduledReconciliation_ && scheduler_.complete(pending->first, pending->second)) scheduledReconciliation_ = false;
+            if (!stopped_ && pendingReconciliation_ && fencedCompletion && capturedFenceMatches && currentFenceMatches) {
+                pendingReconciliation_ = false;
+                health_ = RootHealth::Healthy;
+                diagnostic_ = boundedDiagnostic("monitoring healthy");
+            }
+        } catch (...) {
+            std::lock_guard lock(mutex_);
+            reconciliationExecutionInFlight_ = false;
+            throw;
         }
     }
     return FileMonitorStepStatus::Admitted;
@@ -140,6 +161,7 @@ bool FileMonitorService::updateQuota(OutboxQuotaStatus quota)
     std::optional<RootDirty> saturation;
     {
         std::lock_guard lock(mutex_);
+        const bool wasHardLimited = quota_.hardLimited;
         quota_ = quota;
         if (stopped_) return false;
         const bool reconciliationPending = pendingReconciliation_;
@@ -152,6 +174,7 @@ bool FileMonitorService::updateQuota(OutboxQuotaStatus quota)
                 if (dirtyAdmissionInFlight_) return false;
                 ++epoch_;
                 dirtyAdmissionInFlight_ = true;
+                scheduleReconciliation(ReconciliationTrigger::DirtyOverflow);
                 saturation = RootDirty{root_->rootId, epoch_, static_cast<std::uint32_t>(DirtyReason::QueueSaturation)};
             }
             diagnostic_ = boundedDiagnostic("monitoring quota saturated");
@@ -168,6 +191,7 @@ bool FileMonitorService::updateQuota(OutboxQuotaStatus quota)
                 health_ = RootHealth::Healthy;
                 diagnostic_ = boundedDiagnostic("monitoring healthy");
             }
+            if (wasHardLimited) scheduleReconciliation(ReconciliationTrigger::PostSaturation);
         }
     }
     bool accepted = true; while (saturation) {

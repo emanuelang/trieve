@@ -1,11 +1,34 @@
 #pragma once
 
 #include "semantic_fs/monitoring/i_catalog_outbox_writer.h"
+#include "semantic_fs/monitoring/i_clock.h"
+
+#include <map>
 
 namespace semantic_fs::monitoring {
 enum class ReconciliationStepStatus { AwaitingBarrier, Dirty, Busy };
 struct ReconciliationCatalogEntry { NormalizedPath path; FileMetadata metadata; };
 struct ReconciliationStepResult { ReconciliationStepStatus status; std::size_t applied; };
+
+enum class ReconciliationTrigger { Startup, Interval, DirtyOverflow, PostSaturation };
+enum class ReconciliationAdmissionStatus { Admitted, Coalesced, NotDue };
+
+class ReconciliationScheduler final {
+public:
+    explicit ReconciliationScheduler(const IClock& clock) : clock_(clock) {}
+
+    ReconciliationAdmissionStatus request(const RootId&, GapEpoch, ReconciliationTrigger);
+    bool complete(const RootId&, GapEpoch);
+    [[nodiscard]] std::size_t activeRunCount() const { return active_.size(); }
+
+private:
+    struct Run { GapEpoch epoch; };
+
+    const IClock& clock_;
+    std::map<std::string, Run, std::less<>> active_;
+    std::map<std::string, MonotonicTimestamp, std::less<>> lastAdmission_;
+};
+
 class ReconciliationService {
 public:
     ReconciliationStepResult step(ICatalogOutboxWriter&, const RootId&, GapEpoch, const std::vector<ReconciliationCatalogEntry>&, UtcTimestamp);

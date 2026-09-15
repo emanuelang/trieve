@@ -28,16 +28,20 @@ public:
 private:
     [[nodiscard]] bool validConfig() const;
     [[nodiscard]] std::string boundedDiagnostic(std::string_view value) const;
+    bool scheduleReconciliation(ReconciliationTrigger trigger);
 
     SafeStartupCoordinator& startup_;
     FileMonitorConfig config_;
     IShutdownDrain* drain_;
     IReconciliationExecutor* reconciliation_;
     mutable std::mutex mutex_;
+    ReconciliationScheduler scheduler_;
     std::optional<WatchRootConfig> root_;
     RootHealth health_{RootHealth::Stopped};
     bool acceptingWork_{};
     bool pendingReconciliation_{};
+    bool scheduledReconciliation_{};
+    bool reconciliationExecutionInFlight_{};
     bool dirtyAdmissionPending_{}, dirtyAdmissionInFlight_{};
     bool stopped_{};
     OutboxQuotaStatus quota_{};

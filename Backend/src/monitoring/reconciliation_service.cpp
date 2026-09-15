@@ -2,9 +2,44 @@
 
 namespace semantic_fs::monitoring {
 namespace {
+constexpr std::int64_t kFifteenMinutesMicroseconds = 15LL * 60 * 1'000'000;
 bool same(const RelativePath& left, const RelativePath& right) { return left.components == right.components; }
 bool covers(const RelativePath& prefix, const RelativePath& value) { return prefix.components.size() <= value.components.size() && std::equal(prefix.components.begin(),prefix.components.end(),value.components.begin()); }
 }
+
+ReconciliationAdmissionStatus ReconciliationScheduler::request(const RootId& root, GapEpoch epoch, ReconciliationTrigger trigger)
+{
+    const std::string key(root.value());
+    const auto now = clock_.monotonicNow();
+    if (const auto active = active_.find(key); active != active_.end()) {
+        if (epoch > active->second.epoch) {
+            active->second.epoch = epoch;
+            lastAdmission_.insert_or_assign(key, now);
+        }
+        return ReconciliationAdmissionStatus::Coalesced;
+    }
+
+    if (trigger == ReconciliationTrigger::Interval) {
+        const auto previous = lastAdmission_.find(key);
+        if (previous != lastAdmission_.end() && (now.microsecondsSinceOrigin < previous->second.microsecondsSinceOrigin
+            || now.microsecondsSinceOrigin - previous->second.microsecondsSinceOrigin < kFifteenMinutesMicroseconds)) {
+            return ReconciliationAdmissionStatus::NotDue;
+        }
+    }
+
+    active_.emplace(key, Run{epoch});
+    lastAdmission_.insert_or_assign(key, now);
+    return ReconciliationAdmissionStatus::Admitted;
+}
+
+bool ReconciliationScheduler::complete(const RootId& root, GapEpoch epoch)
+{
+    const auto found = active_.find(std::string(root.value()));
+    if (found == active_.end() || found->second.epoch != epoch) return false;
+    active_.erase(found);
+    return true;
+}
+
 ReconciliationStepResult ReconciliationService::step(ICatalogOutboxWriter& writer, const RootId& root, GapEpoch epoch, const std::vector<ReconciliationCatalogEntry>& catalog, UtcTimestamp now)
 {
     const auto read=writer.beginReconciliation(root,epoch,now);
