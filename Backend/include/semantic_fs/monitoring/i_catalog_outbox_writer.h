@@ -15,8 +15,9 @@ struct TransitionCommand { RootId rootId; NormalizedPath path; FileMetadata meta
 struct MutationResult { MutationStatus status; std::optional<EventId> eventId; std::optional<Generation> generation; };
 enum class ReconciliationStorageStatus { Started, Active, Busy, Stored, Invalid, StorageFailure };
 struct ReconciliationStagedObservation { NormalizedPath path; FileMetadata metadata; bool completedSubtree = false; };
-struct ReconciliationRun { RootId rootId; GapEpoch capturedEpoch; std::size_t scanCursor; std::size_t finalizeCursor; bool scanArmed; };
+struct ReconciliationRun { RootId rootId; GapEpoch capturedEpoch; std::size_t scanCursor; std::size_t finalizeCursor; bool scanArmed; std::string runId; std::optional<WatcherSequence> requiredHighWater; std::optional<EventId> finalOutboxEvent; };
 struct ReconciliationRead { ReconciliationStorageStatus status; std::optional<ReconciliationRun> run; std::vector<ReconciliationStagedObservation> staged; };
+struct ReconciliationCompletion { RootId rootId; std::string runId; GapEpoch epoch; BarrierReached barrier; std::optional<EventId> finalOutboxEvent; WatcherSequence requiredHighWater; };
 enum class CoverageStatus { Persisted, Deferred, Refused, StorageFailure };
 struct CoverageCommand { RootId rootId; std::uint64_t epoch; std::uint32_t reasons; std::optional<ChangeKind> deferredKind; };
 struct CoverageResult { CoverageStatus status; };
@@ -38,9 +39,13 @@ class ICatalogOutboxWriter {
 public:
     virtual ~ICatalogOutboxWriter() = default;
     virtual MutationResult apply(const TransitionCommand& command) = 0;
+    virtual MutationResult applyReconciliation(const std::string&, const TransitionCommand& command) { return apply(command); }
     virtual ReconciliationRead beginReconciliation(const RootId&, GapEpoch, UtcTimestamp) { return {ReconciliationStorageStatus::StorageFailure, {}, {}}; }
     virtual ReconciliationStorageStatus stageReconciliation(const RootId&, GapEpoch, const std::vector<ReconciliationStagedObservation>&) { return ReconciliationStorageStatus::StorageFailure; }
+    virtual ReconciliationStorageStatus armReconciliation(const RootId&, GapEpoch, WatcherSequence) { return ReconciliationStorageStatus::StorageFailure; }
     virtual ReconciliationStorageStatus advanceReconciliation(const RootId&, GapEpoch, std::size_t, bool) { return ReconciliationStorageStatus::StorageFailure; }
+    virtual ReconciliationStorageStatus completeReconciliation(const ReconciliationCompletion&) { return ReconciliationStorageStatus::StorageFailure; }
+    virtual std::size_t reconciliationFinalOutboxCount(const RootId&) const { return 0; }
     virtual CoverageResult recordCoverage(const CoverageCommand& command) = 0;
     virtual RecoveryResult recover(const RecoveryRequest&) = 0;
     virtual ClaimResult claim(const ClaimRequest&) = 0;

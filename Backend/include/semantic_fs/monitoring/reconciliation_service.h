@@ -33,8 +33,9 @@ class ReconciliationService {
 public:
     ReconciliationStepResult step(ICatalogOutboxWriter&, const RootId&, GapEpoch, const std::vector<ReconciliationCatalogEntry>&, UtcTimestamp);
     bool accept(BarrierReached);
+    bool accept(ICatalogOutboxWriter&, BarrierReached);
     [[nodiscard]] bool dirtyClearEligible() const { return eligible_; }
 private:
-    std::optional<RootId> root_; GapEpoch epoch_ = 0; bool eligible_ = false;
+    std::optional<RootId> root_; std::optional<EventId> finalOutboxEvent_; std::string runId_; GapEpoch epoch_ = 0; WatcherSequence requiredHighWater_ = 0; bool eligible_ = false;
 };
 } // namespace semantic_fs::monitoring

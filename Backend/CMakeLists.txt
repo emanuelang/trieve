@@ -103,6 +103,7 @@ if(BUILD_TESTING)
         tests/monitoring/phase4_reconciliation_storage_test.cpp
         tests/monitoring/phase4_reconciliation_service_test.cpp
         tests/monitoring/phase4_reconciliation_scheduler_test.cpp
+        tests/monitoring/phase4_reconciliation_completion_test.cpp
         tests/monitoring/watcher_contracts_test.cpp
         tests/monitoring/safe_startup_coordinator_test.cpp
         tests/monitoring/path_policy_test.cpp
