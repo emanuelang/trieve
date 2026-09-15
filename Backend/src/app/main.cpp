@@ -1,5 +1,6 @@
 #include "semantic_fs/answer/answer_module.h"
 #include "semantic_fs/answer/ollama_client.h"
+#include "semantic_fs/knowledge/knowledge_query_service.h"
 #include "semantic_fs/orchestration/indexing_orchestrator.h"
 
 #include <fmt/core.h>
@@ -149,6 +150,7 @@ void printUsage()
     fmt::print("Usage:\n");
     fmt::print("  semantic_fs_backend ingest <file_path>\n");
     fmt::print("  semantic_fs_backend ingest-folder <folder_path>\n");
+    fmt::print("  semantic_fs_backend graph-search <question>\n");
     fmt::print("  semantic_fs_backend ask <question> [file_path]\n");
     fmt::print("  semantic_fs_backend <file_path> [question]\n");
 }
@@ -185,6 +187,16 @@ void printDocumentDebug(const semantic_fs::core::FileDocument& document)
     } else {
         fmt::print("RAG result unavailable\n");
     }
+
+    fmt::print("\n[Knowledge] Mapa de conocimiento\n");
+    if (document.hasKnowledgeIndexingResult()) {
+        const auto& knowledge = document.knowledgeIndexingResult();
+        fmt::print("Nodes total: {}\n", knowledge.nodeCount);
+        fmt::print("Edges total: {}\n", knowledge.edgeCount);
+        fmt::print("Rules detected in file: {}\n", knowledge.ruleCount);
+    } else {
+        fmt::print("Knowledge result unavailable\n");
+    }
 }
 
 semantic_fs::answer::AnswerRequest makeAnswerRequest(
@@ -202,7 +214,7 @@ semantic_fs::answer::AnswerRequest makeAnswerRequest(
     request.options.attachImagesToLlm = attachImagesToLlm;
     request.options.singleBestSource = !attachImagesToLlm;
     if (!imagePaths.empty()) {
-        request.options.topK = attachImagesToLlm ? 2 : 8;
+        request.options.topK = attachImagesToLlm ? 2 : 64;
         request.options.maxContextChunks = attachImagesToLlm ? 1 : 4;
         request.options.maxContextCharacters = attachImagesToLlm ? 800 : 2200;
     }
@@ -226,6 +238,7 @@ void printAnswerDebug(const semantic_fs::answer::AnswerResult& answer)
     fmt::print("\nDebug respuesta\n");
     fmt::print("Retrieved chunks: {}\n", answer.debug.retrievedChunks);
     fmt::print("Used chunks: {}\n", answer.debug.usedChunks);
+    fmt::print("Used knowledge relations: {}\n", answer.debug.usedKnowledgeRelations);
     fmt::print("Prompt chars: {}\n", answer.debug.promptCharacters);
     fmt::print("Model: {}\n", answer.debug.modelName);
     fmt::print("Fallback: {}\n", answer.debug.usedFallback ? "true" : "false");
@@ -299,7 +312,8 @@ int main(int argc, char* argv[])
             }
 
             std::vector<std::filesystem::path> paths;
-            if (argc >= 4) {
+            const bool userSpecifiedPath = argc >= 4;
+            if (userSpecifiedPath) {
                 paths.emplace_back(argv[3]);
             } else {
                 paths = loadRegisteredPaths();
@@ -323,19 +337,59 @@ int main(int argc, char* argv[])
             try {
                 const semantic_fs::answer::AnswerModule answerModule(
                     semantic_fs::answer::RagQueryService(orchestrator.ragModule()),
+                    semantic_fs::knowledge::KnowledgeQueryService(orchestrator.knowledgeModule()),
                     semantic_fs::answer::ContextRanker {},
                     semantic_fs::answer::PromptBuilder {},
                     std::make_shared<semantic_fs::answer::OllamaClient>()
                 );
 
                 fmt::print("\nConsultando modelo generativo\n");
-                const auto answerRequest = makeAnswerRequest(argv[2], imagePaths, false);
+                const auto answerRequest = makeAnswerRequest(argv[2], imagePaths, userSpecifiedPath);
                 const auto answer = answerModule.answer(answerRequest);
                 printAnswerDebug(answer);
             } catch (const std::exception& error) {
                 spdlog::error("Answer failed: {}", sanitizeUtf8(error.what()));
                 spdlog::error("Start Ollama and set SEMANTIC_FS_LLM_MODEL to an installed model. For images, use a vision model.");
                 return 2;
+            }
+
+            return 0;
+        }
+
+        if (command == "graph-search") {
+            if (argc < 3) {
+                printUsage();
+                return 1;
+            }
+
+            const auto paths = loadRegisteredPaths();
+            if (paths.empty()) {
+                spdlog::error("No hay archivos cargados. Primero ejecuta: semantic_fs_backend ingest <file_path>");
+                return 1;
+            }
+
+            fmt::print("Preparando mapa temporal para consultar\n");
+            for (const auto& path : paths) {
+                const auto document = orchestrator.indexPath(path);
+                printDocumentDebug(document);
+            }
+
+            const semantic_fs::knowledge::KnowledgeQueryService knowledgeQueryService(orchestrator.knowledgeModule());
+            const auto related = knowledgeQueryService.retrieveRelated(argv[2], 12);
+            fmt::print("\nRelaciones encontradas: {}\n", related.size());
+            for (const auto& item : related) {
+                const auto evidence = item.edge.evidence.empty() ? std::string {} : item.edge.evidence.front().text;
+                fmt::print(
+                    "- {} ({}) --{}--> {} ({}) | score {:.3f} | conf {:.2f}\n  evidencia: {}\n",
+                    sanitizeUtf8(item.from.name),
+                    semantic_fs::knowledge::toString(item.from.type),
+                    semantic_fs::knowledge::toString(item.edge.type),
+                    sanitizeUtf8(item.to.name),
+                    semantic_fs::knowledge::toString(item.to.type),
+                    item.score,
+                    item.edge.confidence,
+                    sanitizeUtf8(evidence)
+                );
             }
 
             return 0;
@@ -349,6 +403,7 @@ int main(int argc, char* argv[])
             try {
                 const semantic_fs::answer::AnswerModule answerModule(
                     semantic_fs::answer::RagQueryService(orchestrator.ragModule()),
+                    semantic_fs::knowledge::KnowledgeQueryService(orchestrator.knowledgeModule()),
                     semantic_fs::answer::ContextRanker {},
                     semantic_fs::answer::PromptBuilder {},
                     std::make_shared<semantic_fs::answer::OllamaClient>()

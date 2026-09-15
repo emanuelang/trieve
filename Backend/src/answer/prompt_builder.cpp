@@ -44,6 +44,7 @@ bool asksForImageSearch(const std::string& question)
 PromptRequest PromptBuilder::build(
     const std::string& question,
     const std::vector<semantic_fs::rag::RetrievedChunk>& chunks,
+    const std::vector<semantic_fs::knowledge::RetrievedKnowledge>& knowledge,
     const std::vector<std::filesystem::path>& imagePaths,
     const AnswerOptions& options
 ) const
@@ -52,8 +53,10 @@ PromptRequest PromptBuilder::build(
 
     std::ostringstream prompt;
     prompt << "Sos el modulo de respuesta de un sistema RAG local.\n";
-    prompt << "Responde en espanol usando solo el contexto recuperado.\n";
+    prompt << "Responde en espanol usando solo el contexto recuperado y el contexto estructurado.\n";
     prompt << "No repitas la pregunta como respuesta: responde con datos concretos del contexto.\n";
+    prompt << "El contexto estructurado tiene relaciones extraidas de documentos; usalo para ordenar procesos, reglas y responsables.\n";
+    prompt << "Si una relacion no tiene evidencia suficiente, aclaralo.\n";
     if (imageSearch) {
         prompt << "El usuario pidio traer una imagen por tema. Elegi la fuente mas relevante y responde con este formato:\n";
         prompt << "Imagen encontrada: <nombre del archivo>\n";
@@ -94,6 +97,28 @@ PromptRequest PromptBuilder::build(
         );
     }
 
+    if (!knowledge.empty()) {
+        prompt << "Contexto estructurado del mapa de conocimiento:\n";
+        for (std::size_t index = 0; index < knowledge.size(); ++index) {
+            const auto& item = knowledge[index];
+            const auto evidence = item.edge.evidence.empty() ? semantic_fs::knowledge::KnowledgeEvidence {} : item.edge.evidence.front();
+            prompt << fmt::format(
+                "[K{}] {}({}) --{}--> {}({}) score={:.3f} confidence={:.2f} lang={}({:.2f})\nEvidencia: {}\n\n",
+                index + 1,
+                item.from.name,
+                semantic_fs::knowledge::toString(item.from.type),
+                semantic_fs::knowledge::toString(item.edge.type),
+                item.to.name,
+                semantic_fs::knowledge::toString(item.to.type),
+                item.score,
+                item.edge.confidence,
+                evidence.detectedLanguage,
+                evidence.languageConfidence,
+                evidence.text
+            );
+        }
+    }
+
     if (options.includeSources) {
         prompt << "Inclui fuentes si aportan valor usando el nombre del archivo.\n";
     }
@@ -101,6 +126,7 @@ PromptRequest PromptBuilder::build(
     return {
         .prompt = prompt.str(),
         .chunks = chunks,
+        .knowledge = knowledge,
         .imagePaths = imagePaths
     };
 }

@@ -85,6 +85,16 @@ bool FileDocument::hasRagIndexingResult() const
     return hasRagIndexingResult_;
 }
 
+const semantic_fs::knowledge::KnowledgeIndexingResult& FileDocument::knowledgeIndexingResult() const
+{
+    return knowledgeIndexingResult_;
+}
+
+bool FileDocument::hasKnowledgeIndexingResult() const
+{
+    return hasKnowledgeIndexingResult_;
+}
+
 void FileDocument::setPath(std::filesystem::path path)
 {
     path_ = std::move(path);
@@ -129,6 +139,12 @@ void FileDocument::setRagIndexingResult(semantic_fs::rag::RagIndexingResult resu
 {
     ragIndexingResult_ = result;
     hasRagIndexingResult_ = true;
+}
+
+void FileDocument::setKnowledgeIndexingResult(semantic_fs::knowledge::KnowledgeIndexingResult result)
+{
+    knowledgeIndexingResult_ = result;
+    hasKnowledgeIndexingResult_ = true;
 }
 
 void FileDocument::refreshMetadataFromDisk()

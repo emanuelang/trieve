@@ -3,6 +3,7 @@
 #include "semantic_fs/core/file_document.h"
 #include "semantic_fs/extractors/extraction_types.h"
 #include "semantic_fs/extractors/extractor_factory.h"
+#include "semantic_fs/knowledge/knowledge_module.h"
 #include "semantic_fs/rag/rag_module.h"
 
 #include <filesystem>
@@ -21,7 +22,8 @@ public:
     explicit IndexingOrchestrator(semantic_fs::extractors::ExtractorFactory extractorFactory);
     IndexingOrchestrator(
         semantic_fs::extractors::ExtractorFactory extractorFactory,
-        semantic_fs::rag::RagModule ragModule
+        semantic_fs::rag::RagModule ragModule,
+        semantic_fs::knowledge::KnowledgeModule knowledgeModule = semantic_fs::knowledge::KnowledgeModule {}
     );
 
     // Crea el objeto documento a partir de una ruta recibida desde afuera.
@@ -44,10 +46,12 @@ public:
     // pasa por el flujo minimo de indexacion.
     FileDocument indexPath(const std::filesystem::path& filePath) const;
     const semantic_fs::rag::RagModule& ragModule() const;
+    const semantic_fs::knowledge::KnowledgeModule& knowledgeModule() const;
 
 private:
     semantic_fs::extractors::ExtractorFactory extractorFactory_;
     semantic_fs::rag::RagModule ragModule_;
+    semantic_fs::knowledge::KnowledgeModule knowledgeModule_;
 };
 
 } // namespace semantic_fs::orchestration

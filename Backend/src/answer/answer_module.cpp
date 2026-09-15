@@ -101,11 +101,13 @@ std::vector<std::filesystem::path> selectRelevantImagePaths(
 
 AnswerModule::AnswerModule(
     RagQueryService ragQueryService,
+    semantic_fs::knowledge::KnowledgeQueryService knowledgeQueryService,
     ContextRanker contextRanker,
     PromptBuilder promptBuilder,
     std::shared_ptr<ILlmClient> llmClient
 )
     : ragQueryService_(std::move(ragQueryService)),
+      knowledgeQueryService_(std::move(knowledgeQueryService)),
       contextRanker_(std::move(contextRanker)),
       promptBuilder_(std::move(promptBuilder)),
       llmClient_(std::move(llmClient))
@@ -127,6 +129,10 @@ AnswerResult AnswerModule::answer(const AnswerRequest& request) const
         request.options.maxContextCharacters,
         request.options.singleBestSource
     );
+    const auto relatedKnowledge = knowledgeQueryService_.retrieveRelated(
+        request.question,
+        request.options.maxKnowledgeRelations
+    );
     const auto relevantImagePaths = selectRelevantImagePaths(request.imagePaths, limited);
     const auto attachedImagePaths = request.options.attachImagesToLlm
         ? relevantImagePaths
@@ -134,6 +140,7 @@ AnswerResult AnswerModule::answer(const AnswerRequest& request) const
     const auto prompt = promptBuilder_.build(
         request.question,
         limited,
+        relatedKnowledge,
         attachedImagePaths,
         request.options
     );
@@ -160,6 +167,7 @@ AnswerResult AnswerModule::answer(const AnswerRequest& request) const
         .debug = {
             .retrievedChunks = retrieved.size(),
             .usedChunks = limited.size(),
+            .usedKnowledgeRelations = relatedKnowledge.size(),
             .promptCharacters = prompt.prompt.size(),
             .modelName = llmResponse.modelName,
             .usedFallback = llmResponse.usedFallback,

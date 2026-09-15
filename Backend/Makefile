@@ -14,7 +14,7 @@ OLLAMA_TIMEOUT=300
 OLLAMA_NUM_CTX=1024
 OLLAMA_NUM_PREDICT=128
 
-.PHONY: setup-vcpkg setup-tessdata setup-ollama serve-ollama pull-llm-model configure build run ingest-image ingest-folder ask-answer run-answer setup clean
+.PHONY: setup-vcpkg setup-tessdata setup-ollama serve-ollama pull-llm-model configure build run ingest-image ingest-folder ask-answer ask-file ask-last run-answer setup clean
 
 setup-vcpkg:
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "if (!(Test-Path '$(VCPKG_DIR)')) { git submodule update --init --recursive }; if (!(Test-Path '$(VCPKG_DIR)')) { New-Item -ItemType Directory -Force -Path 'external' | Out-Null; git clone https://github.com/microsoft/vcpkg.git '$(VCPKG_DIR)' }"
@@ -49,6 +49,12 @@ ingest-folder: build
 
 ask-answer: build serve-ollama
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$env:SEMANTIC_FS_LLM_MODEL='$(LLM_MODEL)'; $$env:SEMANTIC_FS_OLLAMA_EXE='$(OLLAMA_EXE)'; $$env:SEMANTIC_FS_OLLAMA_TIMEOUT='$(OLLAMA_TIMEOUT)'; $$env:SEMANTIC_FS_NUM_CTX='$(OLLAMA_NUM_CTX)'; $$env:SEMANTIC_FS_NUM_PREDICT='$(OLLAMA_NUM_PREDICT)'; .\$(BUILD_DIR)\semantic_fs_backend.exe ask '$(QUESTION)'"
+
+ask-file: build serve-ollama
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$env:SEMANTIC_FS_LLM_MODEL='$(LLM_MODEL)'; $$env:SEMANTIC_FS_OLLAMA_EXE='$(OLLAMA_EXE)'; $$env:SEMANTIC_FS_OLLAMA_TIMEOUT='$(OLLAMA_TIMEOUT)'; $$env:SEMANTIC_FS_NUM_CTX='$(OLLAMA_NUM_CTX)'; $$env:SEMANTIC_FS_NUM_PREDICT='$(OLLAMA_NUM_PREDICT)'; .\$(BUILD_DIR)\semantic_fs_backend.exe ask '$(QUESTION)' '$(IMAGE)'"
+
+ask-last: build serve-ollama
+	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$last = Get-Content 'data\loaded_files.txt' | Select-Object -Last 1; $$env:SEMANTIC_FS_LLM_MODEL='$(LLM_MODEL)'; $$env:SEMANTIC_FS_OLLAMA_EXE='$(OLLAMA_EXE)'; $$env:SEMANTIC_FS_OLLAMA_TIMEOUT='$(OLLAMA_TIMEOUT)'; $$env:SEMANTIC_FS_NUM_CTX='$(OLLAMA_NUM_CTX)'; $$env:SEMANTIC_FS_NUM_PREDICT='$(OLLAMA_NUM_PREDICT)'; .\$(BUILD_DIR)\semantic_fs_backend.exe ask '$(QUESTION)' $$last"
 
 run-answer: build serve-ollama
 	powershell -NoProfile -ExecutionPolicy Bypass -Command "$$env:SEMANTIC_FS_LLM_MODEL='$(LLM_MODEL)'; $$env:SEMANTIC_FS_OLLAMA_EXE='$(OLLAMA_EXE)'; $$env:SEMANTIC_FS_OLLAMA_TIMEOUT='$(OLLAMA_TIMEOUT)'; $$env:SEMANTIC_FS_NUM_CTX='$(OLLAMA_NUM_CTX)'; $$env:SEMANTIC_FS_NUM_PREDICT='$(OLLAMA_NUM_PREDICT)'; .\$(BUILD_DIR)\semantic_fs_backend.exe '$(IMAGE)' '$(QUESTION)'"

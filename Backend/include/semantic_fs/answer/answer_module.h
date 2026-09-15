@@ -5,6 +5,7 @@
 #include "semantic_fs/answer/i_llm_client.h"
 #include "semantic_fs/answer/prompt_builder.h"
 #include "semantic_fs/answer/rag_query_service.h"
+#include "semantic_fs/knowledge/knowledge_query_service.h"
 
 #include <memory>
 
@@ -14,6 +15,7 @@ class AnswerModule {
 public:
     AnswerModule(
         RagQueryService ragQueryService,
+        semantic_fs::knowledge::KnowledgeQueryService knowledgeQueryService,
         ContextRanker contextRanker,
         PromptBuilder promptBuilder,
         std::shared_ptr<ILlmClient> llmClient
@@ -23,6 +25,7 @@ public:
 
 private:
     RagQueryService ragQueryService_;
+    semantic_fs::knowledge::KnowledgeQueryService knowledgeQueryService_;
     ContextRanker contextRanker_;
     PromptBuilder promptBuilder_;
     std::shared_ptr<ILlmClient> llmClient_;

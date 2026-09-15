@@ -18,24 +18,110 @@ std::string lowerAscii(std::string text)
     return text;
 }
 
+std::string normalizeSpanishText(const std::string& text)
+{
+    std::string normalized;
+    normalized.reserve(text.size());
+
+    for (std::size_t index = 0; index < text.size();) {
+        const auto byte = static_cast<unsigned char>(text[index]);
+        if (byte < 0x80) {
+            normalized.push_back(static_cast<char>(std::tolower(byte)));
+            ++index;
+            continue;
+        }
+
+        if (index + 1 >= text.size()) {
+            ++index;
+            continue;
+        }
+
+        const auto next = static_cast<unsigned char>(text[index + 1]);
+        if (byte == 0xC3) {
+            switch (next) {
+            case 0xA1:
+            case 0x81:
+                normalized.push_back('a');
+                break;
+            case 0xA9:
+            case 0x89:
+                normalized.push_back('e');
+                break;
+            case 0xAD:
+            case 0x8D:
+                normalized.push_back('i');
+                break;
+            case 0xB3:
+            case 0x93:
+                normalized.push_back('o');
+                break;
+            case 0xBA:
+            case 0x9A:
+            case 0xBC:
+            case 0x9C:
+                normalized.push_back('u');
+                break;
+            case 0xB1:
+            case 0x91:
+                normalized.push_back('n');
+                break;
+            default:
+                normalized.push_back(' ');
+                break;
+            }
+            index += 2;
+            continue;
+        }
+
+        normalized.push_back(' ');
+        ++index;
+    }
+
+    return normalized;
+}
+
+bool isStopword(const std::string& token)
+{
+    static const std::unordered_set<std::string> stopwords {
+        "archivo",
+        "archivos",
+        "cual",
+        "cuales",
+        "dentro",
+        "direccion",
+        "documento",
+        "documentos",
+        "empresa",
+        "esta",
+        "estan",
+        "imagen",
+        "imagenes",
+        "para",
+        "sobre",
+        "trata"
+    };
+
+    return stopwords.contains(token);
+}
+
 std::vector<std::string> tokenizeQuery(const std::string& question)
 {
     std::vector<std::string> tokens;
     std::string current;
 
-    for (const auto character : lowerAscii(question)) {
+    for (const auto character : normalizeSpanishText(question)) {
         if (std::isalnum(static_cast<unsigned char>(character))) {
             current.push_back(character);
             continue;
         }
 
-        if (current.size() >= 4) {
+        if (current.size() >= 4 && !isStopword(current)) {
             tokens.push_back(current);
         }
         current.clear();
     }
 
-    if (current.size() >= 4) {
+    if (current.size() >= 4 && !isStopword(current)) {
         tokens.push_back(current);
     }
 
@@ -50,14 +136,21 @@ double lexicalBoost(const semantic_fs::rag::RetrievedChunk& chunk, const std::ve
         return 0.0;
     }
 
-    const auto text = lowerAscii(chunk.chunk.text + " " + chunk.chunk.fileName + " " + chunk.chunk.source);
+    const auto text = normalizeSpanishText(chunk.chunk.text + " " + chunk.chunk.fileName + " " + chunk.chunk.source);
     double boost = 0.0;
+    std::size_t matches = 0;
     for (const auto& token : queryTokens) {
         if (text.find(token) != std::string::npos) {
-            boost += 0.18;
+            ++matches;
+            boost += 0.42;
         }
     }
-    return std::min(boost, 0.9);
+
+    if (matches >= 2) {
+        boost += 0.5;
+    }
+
+    return std::min(boost, 1.8);
 }
 
 std::string absolutePathText(const std::filesystem::path& path)

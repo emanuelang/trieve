@@ -13,10 +13,12 @@ IndexingOrchestrator::IndexingOrchestrator(
 
 IndexingOrchestrator::IndexingOrchestrator(
     semantic_fs::extractors::ExtractorFactory extractorFactory,
-    semantic_fs::rag::RagModule ragModule
+    semantic_fs::rag::RagModule ragModule,
+    semantic_fs::knowledge::KnowledgeModule knowledgeModule
 )
     : extractorFactory_(std::move(extractorFactory)),
-      ragModule_(std::move(ragModule))
+      ragModule_(std::move(ragModule)),
+      knowledgeModule_(std::move(knowledgeModule))
 {
 }
 
@@ -52,6 +54,7 @@ IndexingOrchestrator::FileDocument IndexingOrchestrator::indexFile(FileDocument 
     }
 
     file.setRagIndexingResult(ragModule_.indexDocument(file));
+    file.setKnowledgeIndexingResult(knowledgeModule_.indexDocument(file));
 
     return file;
 }
@@ -66,6 +69,11 @@ IndexingOrchestrator::FileDocument IndexingOrchestrator::indexPath(
 const semantic_fs::rag::RagModule& IndexingOrchestrator::ragModule() const
 {
     return ragModule_;
+}
+
+const semantic_fs::knowledge::KnowledgeModule& IndexingOrchestrator::knowledgeModule() const
+{
+    return knowledgeModule_;
 }
 
 } // namespace semantic_fs::orchestration

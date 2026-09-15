@@ -1,6 +1,7 @@
 #pragma once
 
 #include "semantic_fs/rag/rag_types.h"
+#include "semantic_fs/knowledge/knowledge_types.h"
 
 #include <cstddef>
 #include <filesystem>
@@ -17,6 +18,7 @@ struct AnswerOptions {
     bool debugEnabled = true;
     bool attachImagesToLlm = true;
     bool singleBestSource = false;
+    std::size_t maxKnowledgeRelations = 8;
 };
 
 struct AnswerRequest {
@@ -28,6 +30,7 @@ struct AnswerRequest {
 struct PromptRequest {
     std::string prompt;
     std::vector<semantic_fs::rag::RetrievedChunk> chunks;
+    std::vector<semantic_fs::knowledge::RetrievedKnowledge> knowledge;
     std::vector<std::filesystem::path> imagePaths;
 };
 
@@ -49,6 +52,7 @@ struct AnswerSource {
 struct AnswerDebugInfo {
     std::size_t retrievedChunks = 0;
     std::size_t usedChunks = 0;
+    std::size_t usedKnowledgeRelations = 0;
     std::size_t promptCharacters = 0;
     std::string modelName;
     bool usedFallback = false;
